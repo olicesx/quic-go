@@ -3,7 +3,7 @@ package flowcontrol
 import (
 	"time"
 
-	"github.com/daeuniverse/quic-go/internal/protocol"
+	"github.com/olicesx/quic-go/internal/protocol"
 )
 
 type flowController interface {

@@ -4,8 +4,8 @@ import (
 	"net"
 	"sync/atomic"
 
-	"github.com/daeuniverse/quic-go/internal/protocol"
-	"github.com/daeuniverse/quic-go/internal/utils"
+	"github.com/olicesx/quic-go/internal/protocol"
+	"github.com/olicesx/quic-go/internal/utils"
 )
 
 // A sendConn allows sending using a simple Write() on a non-connected packet conn.
@@ -104,8 +104,13 @@ func (c *sconn) capabilities() connCapabilities {
 	return capabilities
 }
 
-func (c *sconn) RemoteAddr() net.Addr { return c.remoteAddr.Load().(net.Addr) }
-func (c *sconn) LocalAddr() net.Addr  { return c.localAddr }
+func (c *sconn) RemoteAddr() net.Addr {
+	if v := c.remoteAddr.Load(); v != nil {
+		return v.(net.Addr)
+	}
+	return nil
+}
+func (c *sconn) LocalAddr() net.Addr { return c.localAddr }
 
 func (c *sconn) SetRemoteAddr(addr net.Addr) {
 	if addr == nil {

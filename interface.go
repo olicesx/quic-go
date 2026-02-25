@@ -8,10 +8,10 @@ import (
 	"net"
 	"time"
 
-	"github.com/daeuniverse/quic-go/congestion"
-	"github.com/daeuniverse/quic-go/internal/handshake"
-	"github.com/daeuniverse/quic-go/internal/protocol"
-	"github.com/daeuniverse/quic-go/logging"
+	"github.com/olicesx/quic-go/congestion"
+	"github.com/olicesx/quic-go/internal/handshake"
+	"github.com/olicesx/quic-go/internal/protocol"
+	"github.com/olicesx/quic-go/logging"
 )
 
 // The StreamID is the ID of a QUIC stream.

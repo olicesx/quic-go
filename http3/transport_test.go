@@ -10,10 +10,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/daeuniverse/quic-go"
-	mockquic "github.com/daeuniverse/quic-go/internal/mocks/quic"
-	"github.com/daeuniverse/quic-go/internal/protocol"
-	"github.com/daeuniverse/quic-go/internal/qerr"
+	"github.com/olicesx/quic-go"
+	mockquic "github.com/olicesx/quic-go/internal/mocks/quic"
+	"github.com/olicesx/quic-go/internal/protocol"
+	"github.com/olicesx/quic-go/internal/qerr"
 
 	"github.com/stretchr/testify/require"
 	"go.uber.org/mock/gomock"

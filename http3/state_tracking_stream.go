@@ -6,7 +6,7 @@ import (
 	"os"
 	"sync"
 
-	"github.com/daeuniverse/quic-go"
+	"github.com/olicesx/quic-go"
 )
 
 var _ quic.Stream = &stateTrackingStream{}

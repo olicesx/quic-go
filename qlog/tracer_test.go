@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/daeuniverse/quic-go/internal/protocol"
-	"github.com/daeuniverse/quic-go/logging"
+	"github.com/olicesx/quic-go/internal/protocol"
+	"github.com/olicesx/quic-go/logging"
 	"github.com/stretchr/testify/require"
 )
 

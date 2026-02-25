@@ -12,16 +12,16 @@ import (
 	"testing"
 	"time"
 
-	"github.com/daeuniverse/quic-go/internal/ackhandler"
-	"github.com/daeuniverse/quic-go/internal/handshake"
-	"github.com/daeuniverse/quic-go/internal/mocks"
-	mockackhandler "github.com/daeuniverse/quic-go/internal/mocks/ackhandler"
-	mocklogging "github.com/daeuniverse/quic-go/internal/mocks/logging"
-	"github.com/daeuniverse/quic-go/internal/protocol"
-	"github.com/daeuniverse/quic-go/internal/qerr"
-	"github.com/daeuniverse/quic-go/internal/utils"
-	"github.com/daeuniverse/quic-go/internal/wire"
-	"github.com/daeuniverse/quic-go/logging"
+	"github.com/olicesx/quic-go/internal/ackhandler"
+	"github.com/olicesx/quic-go/internal/handshake"
+	"github.com/olicesx/quic-go/internal/mocks"
+	mockackhandler "github.com/olicesx/quic-go/internal/mocks/ackhandler"
+	mocklogging "github.com/olicesx/quic-go/internal/mocks/logging"
+	"github.com/olicesx/quic-go/internal/protocol"
+	"github.com/olicesx/quic-go/internal/qerr"
+	"github.com/olicesx/quic-go/internal/utils"
+	"github.com/olicesx/quic-go/internal/wire"
+	"github.com/olicesx/quic-go/logging"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -105,6 +105,7 @@ func newServerTestConnection(
 	sendConn.EXPECT().capabilities().Return(connCapabilities{GSO: gso}).AnyTimes()
 	sendConn.EXPECT().RemoteAddr().Return(remoteAddr).AnyTimes()
 	sendConn.EXPECT().LocalAddr().Return(localAddr).AnyTimes()
+	sendConn.EXPECT().SetRemoteAddr(gomock.Any()).AnyTimes()
 	packer := NewMockPacker(mockCtrl)
 	b := make([]byte, 12)
 	rand.Read(b)
@@ -165,6 +166,7 @@ func newClientTestConnection(
 	sendConn.EXPECT().capabilities().Return(connCapabilities{}).AnyTimes()
 	sendConn.EXPECT().RemoteAddr().Return(remoteAddr).AnyTimes()
 	sendConn.EXPECT().LocalAddr().Return(localAddr).AnyTimes()
+	sendConn.EXPECT().SetRemoteAddr(gomock.Any()).AnyTimes()
 	packer := NewMockPacker(mockCtrl)
 	b := make([]byte, 12)
 	rand.Read(b)

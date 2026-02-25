@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/daeuniverse/quic-go"
-	quicproxy "github.com/daeuniverse/quic-go/integrationtests/tools/proxy"
+	"github.com/olicesx/quic-go"
+	quicproxy "github.com/olicesx/quic-go/integrationtests/tools/proxy"
 	"github.com/stretchr/testify/require"
 )
 

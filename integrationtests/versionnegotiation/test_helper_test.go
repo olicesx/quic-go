@@ -7,9 +7,9 @@ import (
 	"flag"
 	"os"
 
-	"github.com/daeuniverse/quic-go"
-	"github.com/daeuniverse/quic-go/integrationtests/tools"
-	"github.com/daeuniverse/quic-go/logging"
+	"github.com/olicesx/quic-go"
+	"github.com/olicesx/quic-go/integrationtests/tools"
+	"github.com/olicesx/quic-go/logging"
 )
 
 var (

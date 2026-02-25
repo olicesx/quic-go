@@ -12,14 +12,14 @@ import (
 
 	"golang.org/x/time/rate"
 
-	"github.com/daeuniverse/quic-go/internal/handshake"
-	mocklogging "github.com/daeuniverse/quic-go/internal/mocks/logging"
-	"github.com/daeuniverse/quic-go/internal/protocol"
-	"github.com/daeuniverse/quic-go/internal/qerr"
-	"github.com/daeuniverse/quic-go/internal/testdata"
-	"github.com/daeuniverse/quic-go/internal/utils"
-	"github.com/daeuniverse/quic-go/internal/wire"
-	"github.com/daeuniverse/quic-go/logging"
+	"github.com/olicesx/quic-go/internal/handshake"
+	mocklogging "github.com/olicesx/quic-go/internal/mocks/logging"
+	"github.com/olicesx/quic-go/internal/protocol"
+	"github.com/olicesx/quic-go/internal/qerr"
+	"github.com/olicesx/quic-go/internal/testdata"
+	"github.com/olicesx/quic-go/internal/utils"
+	"github.com/olicesx/quic-go/internal/wire"
+	"github.com/olicesx/quic-go/logging"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"

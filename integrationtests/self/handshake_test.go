@@ -11,11 +11,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/daeuniverse/quic-go"
-	quicproxy "github.com/daeuniverse/quic-go/integrationtests/tools/proxy"
-	"github.com/daeuniverse/quic-go/internal/protocol"
-	"github.com/daeuniverse/quic-go/internal/qerr"
-	"github.com/daeuniverse/quic-go/internal/qtls"
+	"github.com/olicesx/quic-go"
+	quicproxy "github.com/olicesx/quic-go/integrationtests/tools/proxy"
+	"github.com/olicesx/quic-go/internal/protocol"
+	"github.com/olicesx/quic-go/internal/qerr"
+	"github.com/olicesx/quic-go/internal/qtls"
 
 	"github.com/stretchr/testify/require"
 )

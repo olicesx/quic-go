@@ -1,10 +1,10 @@
 package ackhandler
 
 import (
-	mocklogging "github.com/daeuniverse/quic-go/internal/mocks/logging"
-	"github.com/daeuniverse/quic-go/internal/protocol"
-	"github.com/daeuniverse/quic-go/internal/utils"
-	"github.com/daeuniverse/quic-go/logging"
+	mocklogging "github.com/olicesx/quic-go/internal/mocks/logging"
+	"github.com/olicesx/quic-go/internal/protocol"
+	"github.com/olicesx/quic-go/internal/utils"
+	"github.com/olicesx/quic-go/logging"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"

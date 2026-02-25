@@ -4,7 +4,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/daeuniverse/quic-go/internal/protocol"
+	"github.com/olicesx/quic-go/internal/protocol"
 )
 
 // A Packet is a packet

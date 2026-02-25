@@ -1,6 +1,6 @@
 package logging
 
-import "github.com/daeuniverse/quic-go/internal/wire"
+import "github.com/olicesx/quic-go/internal/wire"
 
 // A Frame is a QUIC frame
 type Frame interface{}

@@ -1,4 +1,4 @@
-module github.com/daeuniverse/quic-go
+module github.com/olicesx/quic-go
 
 go 1.22
 

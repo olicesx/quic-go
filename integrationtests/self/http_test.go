@@ -22,9 +22,9 @@ import (
 
 	"golang.org/x/sync/errgroup"
 
-	"github.com/daeuniverse/quic-go"
-	"github.com/daeuniverse/quic-go/http3"
-	quicproxy "github.com/daeuniverse/quic-go/integrationtests/tools/proxy"
+	"github.com/olicesx/quic-go"
+	"github.com/olicesx/quic-go/http3"
+	quicproxy "github.com/olicesx/quic-go/integrationtests/tools/proxy"
 
 	"github.com/stretchr/testify/require"
 )

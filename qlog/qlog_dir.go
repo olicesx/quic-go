@@ -8,8 +8,8 @@ import (
 	"os"
 	"strings"
 
-	"github.com/daeuniverse/quic-go/internal/utils"
-	"github.com/daeuniverse/quic-go/logging"
+	"github.com/olicesx/quic-go/internal/utils"
+	"github.com/olicesx/quic-go/logging"
 )
 
 // DefaultConnectionTracer creates a qlog file in the qlog directory specified by the QLOGDIR environment variable.

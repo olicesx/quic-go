@@ -12,9 +12,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/daeuniverse/quic-go"
-	"github.com/daeuniverse/quic-go/internal/protocol"
-	"github.com/daeuniverse/quic-go/quicvarint"
+	"github.com/olicesx/quic-go"
+	"github.com/olicesx/quic-go/internal/protocol"
+	"github.com/olicesx/quic-go/quicvarint"
 
 	"github.com/quic-go/qpack"
 )

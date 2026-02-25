@@ -3,8 +3,8 @@ package congestion
 import (
 	"time"
 
-	"github.com/daeuniverse/quic-go/congestion"
-	"github.com/daeuniverse/quic-go/internal/protocol"
+	"github.com/olicesx/quic-go/congestion"
+	"github.com/olicesx/quic-go/internal/protocol"
 )
 
 // A SendAlgorithm performs congestion control

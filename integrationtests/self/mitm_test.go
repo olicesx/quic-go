@@ -14,11 +14,11 @@ import (
 
 	"golang.org/x/exp/rand"
 
-	"github.com/daeuniverse/quic-go"
-	quicproxy "github.com/daeuniverse/quic-go/integrationtests/tools/proxy"
-	"github.com/daeuniverse/quic-go/internal/protocol"
-	"github.com/daeuniverse/quic-go/internal/wire"
-	"github.com/daeuniverse/quic-go/testutils"
+	"github.com/olicesx/quic-go"
+	quicproxy "github.com/olicesx/quic-go/integrationtests/tools/proxy"
+	"github.com/olicesx/quic-go/internal/protocol"
+	"github.com/olicesx/quic-go/internal/wire"
+	"github.com/olicesx/quic-go/testutils"
 
 	"github.com/stretchr/testify/require"
 )

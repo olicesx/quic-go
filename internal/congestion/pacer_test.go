@@ -4,7 +4,7 @@ import (
 	"math/rand"
 	"time"
 
-	"github.com/daeuniverse/quic-go/internal/protocol"
+	"github.com/olicesx/quic-go/internal/protocol"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"

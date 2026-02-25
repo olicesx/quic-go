@@ -10,9 +10,9 @@ import (
 	"slices"
 	"time"
 
-	"github.com/daeuniverse/quic-go/internal/protocol"
-	"github.com/daeuniverse/quic-go/internal/qerr"
-	"github.com/daeuniverse/quic-go/quicvarint"
+	"github.com/olicesx/quic-go/internal/protocol"
+	"github.com/olicesx/quic-go/internal/qerr"
+	"github.com/olicesx/quic-go/quicvarint"
 )
 
 // AdditionalTransportParametersClient are additional transport parameters that will be added
