@@ -1,9 +1,9 @@
 package wire
 
 import (
-	"github.com/daeuniverse/quic-go/internal/protocol"
-	"github.com/daeuniverse/quic-go/internal/qerr"
-	"github.com/daeuniverse/quic-go/quicvarint"
+	"github.com/olicesx/quic-go/internal/protocol"
+	"github.com/olicesx/quic-go/internal/qerr"
+	"github.com/olicesx/quic-go/quicvarint"
 )
 
 // A StopSendingFrame is a STOP_SENDING frame

@@ -4,8 +4,8 @@ import (
 	"bytes"
 	"testing"
 
-	"github.com/daeuniverse/quic-go/internal/protocol"
-	"github.com/daeuniverse/quic-go/quicvarint"
+	"github.com/olicesx/quic-go/internal/protocol"
+	"github.com/olicesx/quic-go/quicvarint"
 
 	"github.com/stretchr/testify/require"
 )

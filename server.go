@@ -9,12 +9,12 @@ import (
 	"sync"
 	"time"
 
-	"github.com/daeuniverse/quic-go/internal/handshake"
-	"github.com/daeuniverse/quic-go/internal/protocol"
-	"github.com/daeuniverse/quic-go/internal/qerr"
-	"github.com/daeuniverse/quic-go/internal/utils"
-	"github.com/daeuniverse/quic-go/internal/wire"
-	"github.com/daeuniverse/quic-go/logging"
+	"github.com/olicesx/quic-go/internal/handshake"
+	"github.com/olicesx/quic-go/internal/protocol"
+	"github.com/olicesx/quic-go/internal/qerr"
+	"github.com/olicesx/quic-go/internal/utils"
+	"github.com/olicesx/quic-go/internal/wire"
+	"github.com/olicesx/quic-go/logging"
 )
 
 // ErrServerClosed is returned by the Listener or EarlyListener's Accept method after a call to Close.

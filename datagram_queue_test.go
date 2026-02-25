@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/daeuniverse/quic-go/internal/utils"
-	"github.com/daeuniverse/quic-go/internal/wire"
+	"github.com/olicesx/quic-go/internal/utils"
+	"github.com/olicesx/quic-go/internal/wire"
 
 	"github.com/stretchr/testify/require"
 )

@@ -3,7 +3,7 @@ package congestion
 import (
 	"time"
 
-	"github.com/daeuniverse/quic-go/internal/protocol"
+	"github.com/olicesx/quic-go/internal/protocol"
 )
 
 // Note(pwestin): the magic clamping numbers come from the original code in

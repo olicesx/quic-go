@@ -6,13 +6,13 @@ import (
 	"log"
 	"net"
 
-	fuzzhandshake "github.com/daeuniverse/quic-go/fuzzing/handshake"
-	"github.com/daeuniverse/quic-go/fuzzing/internal/helper"
-	"github.com/daeuniverse/quic-go/internal/handshake"
-	"github.com/daeuniverse/quic-go/internal/protocol"
-	"github.com/daeuniverse/quic-go/internal/testdata"
-	"github.com/daeuniverse/quic-go/internal/utils"
-	"github.com/daeuniverse/quic-go/internal/wire"
+	fuzzhandshake "github.com/olicesx/quic-go/fuzzing/handshake"
+	"github.com/olicesx/quic-go/fuzzing/internal/helper"
+	"github.com/olicesx/quic-go/internal/handshake"
+	"github.com/olicesx/quic-go/internal/protocol"
+	"github.com/olicesx/quic-go/internal/testdata"
+	"github.com/olicesx/quic-go/internal/utils"
+	"github.com/olicesx/quic-go/internal/wire"
 )
 
 const alpn = "fuzz"

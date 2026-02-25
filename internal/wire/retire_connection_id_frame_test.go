@@ -4,7 +4,7 @@ import (
 	"io"
 	"testing"
 
-	"github.com/daeuniverse/quic-go/internal/protocol"
+	"github.com/olicesx/quic-go/internal/protocol"
 
 	"github.com/stretchr/testify/require"
 )

@@ -7,9 +7,9 @@ import (
 	"net/netip"
 	"time"
 
-	"github.com/daeuniverse/quic-go"
-	"github.com/daeuniverse/quic-go/internal/protocol"
-	"github.com/daeuniverse/quic-go/logging"
+	"github.com/olicesx/quic-go"
+	"github.com/olicesx/quic-go/internal/protocol"
+	"github.com/olicesx/quic-go/logging"
 
 	"github.com/francoispqt/gojay"
 )

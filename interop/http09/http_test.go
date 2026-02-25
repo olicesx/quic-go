@@ -9,8 +9,8 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/daeuniverse/quic-go"
-	"github.com/daeuniverse/quic-go/internal/testdata"
+	"github.com/olicesx/quic-go"
+	"github.com/olicesx/quic-go/internal/testdata"
 
 	"github.com/stretchr/testify/require"
 )

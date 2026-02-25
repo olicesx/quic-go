@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"net"
 
-	"github.com/daeuniverse/quic-go/internal/protocol"
+	"github.com/olicesx/quic-go/internal/protocol"
 )
 
 func SetupConfigForServer(

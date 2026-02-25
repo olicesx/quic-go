@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/daeuniverse/quic-go"
-	"github.com/daeuniverse/quic-go/http3"
+	"github.com/olicesx/quic-go"
+	"github.com/olicesx/quic-go/http3"
 
 	"github.com/stretchr/testify/require"
 )

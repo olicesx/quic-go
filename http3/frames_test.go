@@ -6,9 +6,9 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/daeuniverse/quic-go"
-	mockquic "github.com/daeuniverse/quic-go/internal/mocks/quic"
-	"github.com/daeuniverse/quic-go/quicvarint"
+	"github.com/olicesx/quic-go"
+	mockquic "github.com/olicesx/quic-go/internal/mocks/quic"
+	"github.com/olicesx/quic-go/quicvarint"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"

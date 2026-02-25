@@ -3,7 +3,7 @@ package ackhandler
 import (
 	"testing"
 
-	"github.com/daeuniverse/quic-go/internal/wire"
+	"github.com/olicesx/quic-go/internal/wire"
 	"github.com/stretchr/testify/require"
 )
 

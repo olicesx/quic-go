@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/quic-go/qpack"
-	mockquic "github.com/daeuniverse/quic-go/internal/mocks/quic"
+	mockquic "github.com/olicesx/quic-go/internal/mocks/quic"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"

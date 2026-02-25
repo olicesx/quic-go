@@ -12,9 +12,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/daeuniverse/quic-go"
-	mockquic "github.com/daeuniverse/quic-go/internal/mocks/quic"
-	"github.com/daeuniverse/quic-go/quicvarint"
+	"github.com/olicesx/quic-go"
+	mockquic "github.com/olicesx/quic-go/internal/mocks/quic"
+	"github.com/olicesx/quic-go/quicvarint"
 
 	"github.com/quic-go/qpack"
 

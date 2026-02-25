@@ -6,12 +6,12 @@ import (
 	"sync"
 	"time"
 
-	"github.com/daeuniverse/quic-go/internal/ackhandler"
-	"github.com/daeuniverse/quic-go/internal/flowcontrol"
-	"github.com/daeuniverse/quic-go/internal/protocol"
-	"github.com/daeuniverse/quic-go/internal/qerr"
-	"github.com/daeuniverse/quic-go/internal/utils"
-	"github.com/daeuniverse/quic-go/internal/wire"
+	"github.com/olicesx/quic-go/internal/ackhandler"
+	"github.com/olicesx/quic-go/internal/flowcontrol"
+	"github.com/olicesx/quic-go/internal/protocol"
+	"github.com/olicesx/quic-go/internal/qerr"
+	"github.com/olicesx/quic-go/internal/utils"
+	"github.com/olicesx/quic-go/internal/wire"
 )
 
 type receiveStreamI interface {

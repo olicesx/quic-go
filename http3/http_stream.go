@@ -8,8 +8,8 @@ import (
 	"net/http"
 	"net/http/httptrace"
 
-	"github.com/daeuniverse/quic-go"
-	"github.com/daeuniverse/quic-go/internal/protocol"
+	"github.com/olicesx/quic-go"
+	"github.com/olicesx/quic-go/internal/protocol"
 
 	"github.com/quic-go/qpack"
 )
