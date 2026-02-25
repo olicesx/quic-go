@@ -11,9 +11,10 @@ const (
 	oneMinusAlpha = 1 - rttAlpha
 	rttBeta       = 0.25
 	oneMinusBeta  = 1 - rttBeta
-	// The default RTT used before an RTT sample is taken.
-	defaultInitialRTT = 100 * time.Millisecond
 )
+
+// The default RTT used before an RTT sample is taken
+const DefaultInitialRTT = 100 * time.Millisecond
 
 // RTTStats provides round-trip statistics
 type RTTStats struct {
@@ -47,8 +48,8 @@ func (r *RTTStats) MaxAckDelay() time.Duration { return r.maxAckDelay }
 
 // PTO gets the probe timeout duration.
 func (r *RTTStats) PTO(includeMaxAckDelay bool) time.Duration {
-	if r.SmoothedRTT() == 0 {
-		return 2 * defaultInitialRTT
+	if !r.hasMeasurement {
+		return 2 * DefaultInitialRTT
 	}
 	pto := r.SmoothedRTT() + max(4*r.MeanDeviation(), protocol.TimerGranularity)
 	if includeMaxAckDelay {
