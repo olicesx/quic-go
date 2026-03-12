@@ -6,7 +6,7 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
           go-version: "1.23.x"
       - name: Check that no non-test files import Ginkgo or Gomega
@@ -45,7 +45,7 @@ jobs:
     name: golangci-lint (Go ${{ matrix.go }})
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
           go-version: ${{ matrix.go }}
       - name: golangci-lint (Linux)
