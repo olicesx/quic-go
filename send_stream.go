@@ -421,6 +421,19 @@ func (s *sendStream) Close() error {
 	return nil
 }
 
+// returnFramesToPool returns all queued frames to the sync.Pool
+func (s *sendStream) returnFramesToPool() {
+	for _, f := range s.retransmissionQueue {
+		f.PutBack()
+	}
+	clear(s.retransmissionQueue)
+	s.retransmissionQueue = nil
+	if s.nextFrame != nil {
+		s.nextFrame.PutBack()
+		s.nextFrame = nil
+	}
+}
+
 func (s *sendStream) CancelWrite(errorCode StreamErrorCode) {
 	s.cancelWrite(errorCode, false)
 }
@@ -456,7 +469,7 @@ func (s *sendStream) cancelWrite(errorCode qerr.StreamErrorCode, remote bool) {
 	s.finalError = &StreamError{StreamID: s.streamID, ErrorCode: errorCode, Remote: remote}
 	s.ctxCancel(s.finalError)
 	s.numOutstandingFrames = 0
-	s.retransmissionQueue = nil
+		s.returnFramesToPool()
 	s.queuedResetStreamFrame = &wire.ResetStreamFrame{
 		StreamID:  s.streamID,
 		FinalSize: s.writeOffset,
@@ -518,9 +531,9 @@ func (s *sendStream) SetWriteDeadline(t time.Time) error {
 // The peer will NOT be informed about this: the stream is closed without sending a FIN or RST.
 func (s *sendStream) closeForShutdown(err error) {
 	s.mutex.Lock()
-	s.closedForShutdown = true
-	if s.finalError == nil && !s.finishedWriting {
-		s.finalError = err
+	if s.shutdownErr == nil && !s.finishedWriting {
+		s.shutdownErr = err
+		s.returnFramesToPool()
 	}
 	s.mutex.Unlock()
 	s.signalWrite()
@@ -562,6 +575,15 @@ func (s *sendStreamAckHandler) OnLost(f wire.Frame) {
 	sf := f.(*wire.StreamFrame)
 	s.mutex.Lock()
 	if s.cancelled {
+		// If the reliable size was 0 when the stream was cancelled,
+		// the number of outstanding frames was immediately set to 0,
+		// and the retransmission queue was dropped.
+		// Return the frame to pool since it won't be retransmitted.
+		if (*sendStream)(s).reliableOffset() == 0 {
+			sf.PutBack()
+			s.mutex.Unlock()
+			return
+		}
 		s.mutex.Unlock()
 		return
 	}
