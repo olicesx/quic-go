@@ -110,6 +110,9 @@ type sentPacketHandler struct {
 
 	tracer *logging.ConnectionTracer
 	logger utils.Logger
+
+	// send time of the largest acknowledged packet, across all packet number spaces
+	largestAckedTime time.Time
 }
 
 var (
@@ -350,6 +353,7 @@ func (h *sentPacketHandler) ReceivedAck(ack *wire.AckFrame, encLevel protocol.En
 	cc := h.getCongestionControl()
 
 	// update the RTT, if the largest acked is newly acknowledged
+	// and it's the last ack-eliciting packet that was sent, across all spaces
 	if len(ackedPackets) > 0 {
 		if p := ackedPackets[len(ackedPackets)-1]; p.PacketNumber == ack.LargestAcked() {
 			// don't use the ack delay for Initial and Handshake packets
@@ -357,9 +361,12 @@ func (h *sentPacketHandler) ReceivedAck(ack *wire.AckFrame, encLevel protocol.En
 			if encLevel == protocol.Encryption1RTT {
 				ackDelay = min(ack.DelayTime, h.rttStats.MaxAckDelay())
 			}
-			h.rttStats.UpdateRTT(rcvTime.Sub(p.SendTime), ackDelay)
-			if h.logger.Debug() {
-				h.logger.Debugf("\tupdated RTT: %s (σ: %s)", h.rttStats.SmoothedRTT(), h.rttStats.MeanDeviation())
+			if h.largestAckedTime.IsZero() || !p.SendTime.Before(h.largestAckedTime) {
+				h.rttStats.UpdateRTT(rcvTime.Sub(p.SendTime), ackDelay)
+				if h.logger.Debug() {
+					h.logger.Debugf("\tupdated RTT: %s (σ: %s)", h.rttStats.SmoothedRTT(), h.rttStats.MeanDeviation())
+				}
+				h.largestAckedTime = p.SendTime
 			}
 			cc.MaybeExitSlowStart()
 		}

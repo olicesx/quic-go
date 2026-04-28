@@ -531,8 +531,8 @@ func (s *sendStream) SetWriteDeadline(t time.Time) error {
 // The peer will NOT be informed about this: the stream is closed without sending a FIN or RST.
 func (s *sendStream) closeForShutdown(err error) {
 	s.mutex.Lock()
-	if s.shutdownErr == nil && !s.finishedWriting {
-		s.shutdownErr = err
+	if s.finalError == nil && !s.finishedWriting {
+		s.finalError = err
 		s.returnFramesToPool()
 	}
 	s.mutex.Unlock()
@@ -575,15 +575,8 @@ func (s *sendStreamAckHandler) OnLost(f wire.Frame) {
 	sf := f.(*wire.StreamFrame)
 	s.mutex.Lock()
 	if s.cancelled {
-		// If the reliable size was 0 when the stream was cancelled,
-		// the number of outstanding frames was immediately set to 0,
-		// and the retransmission queue was dropped.
 		// Return the frame to pool since it won't be retransmitted.
-		if (*sendStream)(s).reliableOffset() == 0 {
-			sf.PutBack()
-			s.mutex.Unlock()
-			return
-		}
+		sf.PutBack()
 		s.mutex.Unlock()
 		return
 	}
