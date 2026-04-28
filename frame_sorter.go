@@ -30,7 +30,7 @@ var errDuplicateStreamData = errors.New("duplicate stream data")
 func newFrameSorter() *frameSorter {
 	s := frameSorter{
 		gapTree: tree.New[utils.ByteInterval](),
-		queue:   make(map[protocol.ByteCount]frameSorterEntry),
+		queue:   make(map[protocol.ByteCount]frameSorterEntry, 64),
 	}
 	s.gapTree.Insert(utils.ByteInterval{Start: 0, End: protocol.MaxByteCount})
 	return &s

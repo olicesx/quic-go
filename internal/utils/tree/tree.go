@@ -36,11 +36,14 @@ type Val[T any] interface {
 	Match(cond T) int8 // returns 1 if > cond, -1 if < cond, 0 if matches cond
 }
 
+const maxNodePoolSize = 512
+
 // Btree represents an AVL tree
 type Btree[T Val[T]] struct {
-	root   *Node[T]
-	values []T
-	len    int
+	root     *Node[T]
+	values   []T
+	len      int
+	nodePool []*Node[T]
 }
 
 // Node represents a node in the tree with a value, left and right children, and a height/balance of the node.
@@ -58,7 +61,32 @@ func (t *Btree[T]) Init() *Btree[T] {
 	t.root = nil
 	t.values = nil
 	t.len = 0
+	t.nodePool = t.nodePool[:0]
 	return t
+}
+
+func (t *Btree[T]) allocNode(value T) *Node[T] {
+	if len(t.nodePool) > 0 {
+		n := t.nodePool[len(t.nodePool)-1]
+		t.nodePool = t.nodePool[:len(t.nodePool)-1]
+		n.Value = value
+		n.left = nil
+		n.right = nil
+		n.height = 1
+		return n
+	}
+	return (&Node[T]{Value: value, height: 1})
+}
+
+func (t *Btree[T]) freeNode(n *Node[T]) {
+	var zero T
+	n.Value = zero
+	n.left = nil
+	n.right = nil
+	n.height = 0
+	if len(t.nodePool) < maxNodePoolSize {
+		t.nodePool = append(t.nodePool, n)
+	}
 }
 
 // String returns a string representation of the tree values
@@ -79,7 +107,7 @@ func (t *Btree[T]) NotEmpty() bool {
 // Insert inserts a new value into the tree and returns the tree pointer
 func (t *Btree[T]) Insert(value T) *Btree[T] {
 	added := false
-	t.root = insert(t.root, value, &added)
+	t.root = t.insert(t.root, value, &added)
 	if added {
 		t.len++
 	}
@@ -87,16 +115,16 @@ func (t *Btree[T]) Insert(value T) *Btree[T] {
 	return t
 }
 
-func insert[T Val[T]](n *Node[T], value T, added *bool) *Node[T] {
+func (t *Btree[T]) insert(n *Node[T], value T, added *bool) *Node[T] {
 	if n == nil {
 		*added = true
-		return (&Node[T]{Value: value}).Init()
+		return t.allocNode(value)
 	}
 	c := value.Comp(n.Value)
 	if c > 0 {
-		n.right = insert(n.right, value, added)
+		n.right = t.insert(n.right, value, added)
 	} else if c < 0 {
-		n.left = insert(n.left, value, added)
+		n.left = t.insert(n.left, value, added)
 	} else {
 		n.Value = value
 		*added = false
@@ -239,7 +267,7 @@ func (t *Btree[T]) Values() []T {
 // Delete deletes the node from the tree associated with the search value
 func (t *Btree[T]) Delete(value T) *Btree[T] {
 	deleted := false
-	t.root = deleteNode(t.root, value, &deleted)
+	t.root = t.deleteNode(t.root, value, &deleted)
 	if deleted {
 		t.len--
 	}
@@ -255,7 +283,7 @@ func (t *Btree[T]) DeleteAll(values []T) *Btree[T] {
 	return t
 }
 
-func deleteNode[T Val[T]](n *Node[T], value T, deleted *bool) *Node[T] {
+func (t *Btree[T]) deleteNode(n *Node[T], value T, deleted *bool) *Node[T] {
 	if n == nil {
 		return n
 	}
@@ -263,24 +291,24 @@ func deleteNode[T Val[T]](n *Node[T], value T, deleted *bool) *Node[T] {
 	c := value.Comp(n.Value)
 
 	if c < 0 {
-		n.left = deleteNode(n.left, value, deleted)
+		n.left = t.deleteNode(n.left, value, deleted)
 	} else if c > 0 {
-		n.right = deleteNode(n.right, value, deleted)
+		n.right = t.deleteNode(n.right, value, deleted)
 	} else {
 		if n.left == nil {
-			t := n.right
-			n.Init()
+			r := n.right
+			t.freeNode(n)
 			*deleted = true
-			return t
+			return r
 		} else if n.right == nil {
-			t := n.left
-			n.Init()
+			l := n.left
+			t.freeNode(n)
 			*deleted = true
-			return t
+			return l
 		}
-		t := n.right.min()
-		n.Value = t.Value
-		n.right = deleteNode(n.right, t.Value, deleted)
+		m := n.right.min()
+		n.Value = m.Value
+		n.right = t.deleteNode(n.right, m.Value, deleted)
 		*deleted = true
 	}
 
@@ -311,18 +339,22 @@ func deleteNode[T Val[T]](n *Node[T], value T, deleted *bool) *Node[T] {
 func (t *Btree[T]) Pop() *T {
 	value := t.Tail()
 	if value != nil {
-		t.Delete(*value)
+		v := *value
+		t.Delete(v)
+		return &v
 	}
-	return value
+	return nil
 }
 
 // Pull deletes the first node from the tree and returns its value
 func (t *Btree[T]) Pull() *T {
 	value := t.Head()
 	if value != nil {
-		t.Delete(*value)
+		v := *value
+		t.Delete(v)
+		return &v
 	}
-	return value
+	return nil
 }
 
 // NodeIterator expresses the iterator function used for traversals
