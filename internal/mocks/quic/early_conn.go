@@ -523,6 +523,18 @@ func (mr *MockEarlyConnectionMockRecorder) ReceiveDatagram(arg0 any) *MockEarlyC
 	return &MockEarlyConnectionReceiveDatagramCall{Call: call}
 }
 
+// ReleaseDatagram mocks base method.
+func (m *MockEarlyConnection) ReleaseDatagram(arg0 []byte) {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "ReleaseDatagram", arg0)
+}
+
+// ReleaseDatagram indicates an expected call of ReleaseDatagram.
+func (mr *MockEarlyConnectionMockRecorder) ReleaseDatagram(arg0 any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ReleaseDatagram", reflect.TypeOf((*MockEarlyConnection)(nil).ReleaseDatagram), arg0)
+}
+
 // MockEarlyConnectionReceiveDatagramCall wrap *gomock.Call
 type MockEarlyConnectionReceiveDatagramCall struct {
 	*gomock.Call

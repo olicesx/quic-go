@@ -4,6 +4,7 @@ import (
 	"context"
 	"sync"
 
+	"github.com/olicesx/quic-go/internal/protocol"
 	"github.com/olicesx/quic-go/internal/utils"
 	"github.com/olicesx/quic-go/internal/utils/ringbuffer"
 	"github.com/olicesx/quic-go/internal/wire"
@@ -13,6 +14,14 @@ const (
 	maxDatagramSendQueueLen = 32
 	maxDatagramRcvQueueLen  = 128
 )
+
+// datagramBufPool recycles the receive-side datagram buffers. Incoming
+// DATAGRAM frames are copied out of the packet buffer into one of these,
+// handed to ReceiveDatagram, and returned via ReleaseDatagram. Without the
+// pool, every inbound datagram allocates (line-rate UDP relay = constant GC
+// pressure); with it, buffers are reused and only the ones actually in flight
+// are live.
+var datagramBufPool = sync.Pool{New: func() any { return make([]byte, 0, protocol.MaxPacketBufferSize) }}
 
 type datagramQueue struct {
 	sendMx    sync.Mutex
@@ -91,12 +100,19 @@ func (h *datagramQueue) Pop() {
 
 // HandleDatagramFrame handles a received DATAGRAM frame.
 func (h *datagramQueue) HandleDatagramFrame(f *wire.DatagramFrame) {
-	data := make([]byte, len(f.Data))
-	copy(data, f.Data)
+	buf := datagramBufPool.Get().([]byte)
+	if cap(buf) < len(f.Data) {
+		// Oversized datagram (larger than the pool cap); allocate fresh and
+		// ReleaseDatagram will skip pooling it (cap check).
+		buf = make([]byte, len(f.Data))
+	} else {
+		buf = buf[:len(f.Data)]
+	}
+	copy(buf, f.Data)
 	var queued bool
 	h.rcvMx.Lock()
 	if len(h.rcvQueue) < maxDatagramRcvQueueLen {
-		h.rcvQueue = append(h.rcvQueue, data)
+		h.rcvQueue = append(h.rcvQueue, buf)
 		queued = true
 		select {
 		case h.rcvd <- struct{}{}:
@@ -107,6 +123,22 @@ func (h *datagramQueue) HandleDatagramFrame(f *wire.DatagramFrame) {
 	if !queued && h.logger.Debug() {
 		h.logger.Debugf("Discarding received DATAGRAM frame (%d bytes payload)", len(f.Data))
 	}
+}
+
+// ReleaseDatagram returns a datagram previously handed out by Receive back to
+// the pool. Callers MUST call this exactly once per datagram after they are
+// done with the buffer. It is a no-op for buffers that were not pooled (e.g.
+// ones whose size exceeded the pool cap at receive time).
+func (h *datagramQueue) ReleaseDatagram(data []byte) {
+	if data == nil {
+		return
+	}
+	if cap(data) != protocol.MaxPacketBufferSize {
+		// Buffer was not taken from the pool (oversized datagram or a
+		// caller-supplied buffer); let GC reclaim it.
+		return
+	}
+	datagramBufPool.Put(data)
 }
 
 // Receive gets a received DATAGRAM frame.

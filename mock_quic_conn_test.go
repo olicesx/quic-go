@@ -522,6 +522,18 @@ func (mr *MockQUICConnMockRecorder) ReceiveDatagram(arg0 any) *MockQUICConnRecei
 	return &MockQUICConnReceiveDatagramCall{Call: call}
 }
 
+// ReleaseDatagram mocks base method.
+func (m *MockQUICConn) ReleaseDatagram(arg0 []byte) {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "ReleaseDatagram", arg0)
+}
+
+// ReleaseDatagram indicates an expected call of ReleaseDatagram.
+func (mr *MockQUICConnMockRecorder) ReleaseDatagram(arg0 any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ReleaseDatagram", reflect.TypeOf((*MockQUICConn)(nil).ReleaseDatagram), arg0)
+}
+
 // MockQUICConnReceiveDatagramCall wrap *gomock.Call
 type MockQUICConnReceiveDatagramCall struct {
 	*gomock.Call

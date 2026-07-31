@@ -2342,6 +2342,10 @@ func (s *connection) ReceiveDatagram(ctx context.Context) ([]byte, error) {
 	return s.datagramQueue.Receive(ctx)
 }
 
+func (s *connection) ReleaseDatagram(data []byte) {
+	s.datagramQueue.ReleaseDatagram(data)
+}
+
 func (s *connection) LocalAddr() net.Addr  { return s.conn.LocalAddr() }
 func (s *connection) RemoteAddr() net.Addr { return s.conn.RemoteAddr() }
 
