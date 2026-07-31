@@ -661,6 +661,8 @@ func (p *packetPacker) composeNextPacket(
 				// Discard this frame. There's no point in retrying this in the next packet,
 				// as it's unlikely that the available packet size will increase.
 				p.datagramQueue.Pop()
+				// The frame was dropped, never packed: return it to the pool.
+				wire.PutDatagramFrame(f)
 			}
 			// If the DATAGRAM frame was too large and the packet contained an ACK, we'll try to send it out later.
 		}
@@ -929,6 +931,12 @@ func (p *packetPacker) appendPacketPayload(raw []byte, pl payload, paddingLen pr
 		raw, err = f.Frame.Append(raw, v)
 		if err != nil {
 			return nil, err
+		}
+		// DATAGRAM frames are never retransmitted (RFC 9221): once packed
+		// into the packet buffer they are not referenced anymore, so the
+		// frame (and its pooled Data) can return to the pool.
+		if df, ok := f.Frame.(*wire.DatagramFrame); ok {
+			wire.PutDatagramFrame(df)
 		}
 	}
 	for _, f := range pl.streamFrames {

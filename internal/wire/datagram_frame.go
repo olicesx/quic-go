@@ -17,11 +17,13 @@ var MaxDatagramSize protocol.ByteCount = 1200
 type DatagramFrame struct {
 	DataLenPresent bool
 	Data           []byte
+
+	fromPool bool
 }
 
 func parseDatagramFrame(b []byte, typ uint64, _ protocol.Version) (*DatagramFrame, int, error) {
 	startLen := len(b)
-	f := &DatagramFrame{}
+	f := GetDatagramFrame()
 	f.DataLenPresent = typ&0x1 > 0
 
 	var length uint64
@@ -30,16 +32,24 @@ func parseDatagramFrame(b []byte, typ uint64, _ protocol.Version) (*DatagramFram
 		var l int
 		length, l, err = quicvarint.Parse(b)
 		if err != nil {
+			PutDatagramFrame(f)
 			return nil, 0, replaceUnexpectedEOF(err)
 		}
 		b = b[l:]
 		if length > uint64(len(b)) {
+			PutDatagramFrame(f)
 			return nil, 0, io.EOF
 		}
 	} else {
 		length = uint64(len(b))
 	}
-	f.Data = make([]byte, length)
+	if length > uint64(cap(f.Data)) {
+		// Oversized datagram (larger than the pool cap): allocate fresh.
+		// PutDatagramFrame will skip pooling it back.
+		f.Data = make([]byte, length)
+	} else {
+		f.Data = f.Data[:length]
+	}
 	copy(f.Data, b)
 	return f, startLen - len(b) + int(length), nil
 }

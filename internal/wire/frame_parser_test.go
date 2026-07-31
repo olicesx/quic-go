@@ -327,7 +327,13 @@ func TestFrameParsingUnpacksDatagramFrames(t *testing.T) {
 	require.NoError(t, err)
 	l, frame, err := parser.ParseNext(b, protocol.Encryption1RTT, protocol.Version1)
 	require.NoError(t, err)
-	require.Equal(t, f, frame)
+	// The parsed frame comes from the shared pool: compare fields except the
+	// pool bookkeeping flag, then return it to the pool.
+	df, ok := frame.(*DatagramFrame)
+	require.True(t, ok)
+	require.Equal(t, f.Data, df.Data)
+	require.Equal(t, f.DataLenPresent, df.DataLenPresent)
+	PutDatagramFrame(df)
 	require.Equal(t, len(b), l)
 }
 

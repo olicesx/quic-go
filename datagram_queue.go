@@ -13,6 +13,10 @@ import (
 const (
 	maxDatagramSendQueueLen = 32
 	maxDatagramRcvQueueLen  = 128
+	// maxDatagramBufPoolLen bounds how many receive buffers are retained for
+	// reuse. 256 x 1452B = ~372KB worst-case steady-state retention, which
+	// caps the pool's footprint while still absorbing line-rate bursts.
+	maxDatagramBufPoolLen = 256
 )
 
 // datagramBufPool recycles the receive-side datagram buffers. Incoming
@@ -21,7 +25,47 @@ const (
 // pool, every inbound datagram allocates (line-rate UDP relay = constant GC
 // pressure); with it, buffers are reused and only the ones actually in flight
 // are live.
-var datagramBufPool = sync.Pool{New: func() any { return make([]byte, 0, protocol.MaxPacketBufferSize) }}
+//
+// A bounded channel is used instead of sync.Pool: sync.Pool boxes []byte into
+// an interface on every Put/Get (a 24B slice-header escape allocation per
+// datagram), and it has no upper bound, so a burst can pin arbitrarily many
+// buffers until the next GC. The channel pool is allocation-free and capped.
+var datagramBufPool = newDatagramBufPool()
+
+type datagramBufPoolT struct {
+	ch chan []byte
+}
+
+func newDatagramBufPool() *datagramBufPoolT {
+	p := &datagramBufPoolT{ch: make(chan []byte, maxDatagramBufPoolLen)}
+	// warm the pool so the first bursts don't all allocate
+	for i := 0; i < maxDatagramBufPoolLen/4; i++ {
+		p.ch <- make([]byte, 0, protocol.MaxPacketBufferSize)
+	}
+	return p
+}
+
+func (p *datagramBufPoolT) Get() []byte {
+	select {
+	case b := <-p.ch:
+		return b[:0]
+	default:
+		return make([]byte, 0, protocol.MaxPacketBufferSize)
+	}
+}
+
+func (p *datagramBufPoolT) Put(b []byte) {
+	if cap(b) != protocol.MaxPacketBufferSize {
+		// Not one of ours (oversized datagram or caller buffer): let GC
+		// reclaim it instead of pinning a large allocation in the pool.
+		return
+	}
+	select {
+	case p.ch <- b:
+	default:
+		// pool full: drop the buffer, GC reclaims it
+	}
+}
 
 type datagramQueue struct {
 	sendMx    sync.Mutex
@@ -47,6 +91,9 @@ func newDatagramQueue(hasData func(), logger utils.Logger) *datagramQueue {
 		sent:    make(chan struct{}, 1),
 		closed:  make(chan struct{}),
 		logger:  logger,
+		// Pre-allocate the receive queue so steady-state enqueue never
+		// triggers slice growth allocations.
+		rcvQueue: make([][]byte, 0, maxDatagramRcvQueueLen),
 	}
 }
 
@@ -70,6 +117,9 @@ func (h *datagramQueue) Add(f *wire.DatagramFrame) error {
 		h.sendMx.Unlock()
 		select {
 		case <-h.closed:
+			// Connection closed while blocked on a full queue: the frame
+			// was never sent, return it to the pool.
+			wire.PutDatagramFrame(f)
 			return h.closeErr
 		case <-h.sent:
 		}
@@ -100,7 +150,7 @@ func (h *datagramQueue) Pop() {
 
 // HandleDatagramFrame handles a received DATAGRAM frame.
 func (h *datagramQueue) HandleDatagramFrame(f *wire.DatagramFrame) {
-	buf := datagramBufPool.Get().([]byte)
+	buf := datagramBufPool.Get()
 	if cap(buf) < len(f.Data) {
 		// Oversized datagram (larger than the pool cap); allocate fresh and
 		// ReleaseDatagram will skip pooling it (cap check).
@@ -109,6 +159,9 @@ func (h *datagramQueue) HandleDatagramFrame(f *wire.DatagramFrame) {
 		buf = buf[:len(f.Data)]
 	}
 	copy(buf, f.Data)
+	// The parsed frame is a pooled object: its payload has been copied into
+	// our own buffer, so the frame (and its Data) can go back to the pool.
+	wire.PutDatagramFrame(f)
 	var queued bool
 	h.rcvMx.Lock()
 	if len(h.rcvQueue) < maxDatagramRcvQueueLen {
