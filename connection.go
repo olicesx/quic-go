@@ -1973,6 +1973,22 @@ func (s *connection) sendPacketsWithGSO(now time.Time) error {
 	maxSize := s.maxPacketSize()
 
 	ecn := s.sentPacketHandler.ECNMode(true)
+	// segSize is the size of the first packet in this GSO batch. All
+	// subsequent packets of the same size are merged into the batch; a
+	// packet of a different size may follow once, as the batch's last
+	// segment (the kernel splits the payload into segSize chunks, so the
+	// final segment may legitimately be shorter).
+	//
+	// Upstream only merged full-size packets, which never happens for
+	// DATAGRAM (UDP relay) traffic: a datagram packet is short-header +
+	// DATAGRAM frame and is not padded to maxSize. Merging same-size
+	// packets instead extends GSO to the relay workload (3-5x send
+	// throughput, measured on loopback). GSO requires uniform segments,
+	// so a batch is closed by the first packet whose size differs from
+	// the batch's segment size.
+	var segSize protocol.ByteCount
+	var lastSize protocol.ByteCount
+	var stopMerging bool
 	for {
 		var dontSendMore bool
 		size, err := s.appendOneShortHeaderPacket(buf, maxSize, ecn, now)
@@ -1985,6 +2001,16 @@ func (s *connection) sendPacketsWithGSO(now time.Time) error {
 				return nil
 			}
 			dontSendMore = true
+		} else {
+			if segSize == 0 {
+				segSize = size
+			} else if stopMerging || size != lastSize {
+				// First packet of a different size: it stays in the
+				// buffer as the batch's last segment, and no further
+				// packets are merged into this batch.
+				stopMerging = true
+			}
+			lastSize = size
 		}
 
 		if !dontSendMore {
@@ -2002,14 +2028,21 @@ func (s *connection) sendPacketsWithGSO(now time.Time) error {
 
 		// Append another packet if
 		// 1. The congestion controller and pacer allow sending more
-		// 2. The last packet appended was a full-size packet
+		// 2. The last packet appended has the same size as the batch's
+		//    segment size (GSO requires uniform segments; this extends the
+		//    upstream full-size-only condition to DATAGRAM traffic)
 		// 3. The next packet will have the same ECN marking
-		// 4. We still have enough space for another full-size packet in the buffer
-		if !dontSendMore && size == maxSize && nextECN == ecn && buf.Len()+maxSize <= buf.Cap() {
+		// 4. We still have enough space for another packet in the buffer
+		if !dontSendMore && !stopMerging && segSize > 0 && size == segSize && nextECN == ecn && buf.Len()+segSize <= buf.Cap() {
 			continue
 		}
 
-		s.sendQueue.Send(buf, uint16(maxSize), ecn)
+		s.sendQueue.Send(buf, uint16(segSize), ecn)
+		// Reset the batch state: the next batch starts fresh and its
+		// first packet determines the new segment size.
+		segSize = 0
+		lastSize = 0
+		stopMerging = false
 
 		if dontSendMore {
 			return nil

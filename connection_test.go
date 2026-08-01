@@ -2032,7 +2032,7 @@ func TestConnectionGSOBatchPacketSize(t *testing.T) {
 	done := make(chan struct{})
 	gomock.InOrder(
 		tc.sendConn.EXPECT().Write(expectedData, uint16(maxPacketSize), protocol.ECT1),
-		tc.sendConn.EXPECT().Write([]byte("foobar"), uint16(maxPacketSize), protocol.ECT1).DoAndReturn(
+		tc.sendConn.EXPECT().Write([]byte("foobar"), uint16(len("foobar")), protocol.ECT1).DoAndReturn(
 			func([]byte, uint16, protocol.ECN) error { close(done); return nil },
 		),
 	)
@@ -2110,7 +2110,7 @@ func TestConnectionGSOBatchECN(t *testing.T) {
 
 	done3 := make(chan struct{})
 	tc.sendConn.EXPECT().Write(expectedData, uint16(maxPacketSize), protocol.ECT1)
-	tc.sendConn.EXPECT().Write([]byte("foobar"), uint16(maxPacketSize), protocol.ECNCE).DoAndReturn(
+	tc.sendConn.EXPECT().Write([]byte("foobar"), uint16(len("foobar")), protocol.ECNCE).DoAndReturn(
 		func([]byte, uint16, protocol.ECN) error { close(done3); return nil },
 	)
 
