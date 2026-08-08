@@ -11,8 +11,23 @@ import (
 )
 
 const (
-	maxDatagramSendQueueLen = 32
-	maxDatagramRcvQueueLen  = 128
+	// maxDatagramSendQueueLen bounds the per-connection DATAGRAM send queue.
+	// Each QUIC packet packs at most one DATAGRAM frame (packet_packer.go),
+	// and the send loop (sendPacketsWithoutGSO) checks SendMode after every
+	// packet — if the pacer or cwnd limits sending, the loop returns and
+	// remaining datagrams wait. With the upstream default of 32, a burst of
+	// UDP relay packets (e.g. game ticks at 60-120 Hz) during concurrent TCP
+	// proxy traffic fills the queue and blocks subsequent Add() calls, which
+	// delays time-sensitive game heartbeats. 256 gives enough headroom for
+	// ~2 seconds of 120 Hz game traffic without blocking.
+	maxDatagramSendQueueLen = 256
+	// maxDatagramRcvQueueLen bounds the per-connection DATAGRAM receive queue.
+	// When full, HandleDatagramFrame silently drops incoming datagrams. Game
+	// servers can burst hundreds of UDP packets during explosions / mass
+	// player events; 128 was too small for these bursts. 512 absorbs typical
+	// FPS game bursts (~1 MB of 2 KB packets) while keeping the per-connection
+	// memory footprint bounded.
+	maxDatagramRcvQueueLen = 512
 	// maxDatagramBufPoolLen bounds how many receive buffers are retained for
 	// reuse. 256 x 1452B = ~372KB worst-case steady-state retention, which
 	// caps the pool's footprint while still absorbing line-rate bursts.
