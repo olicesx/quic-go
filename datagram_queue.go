@@ -2,7 +2,9 @@ package quic
 
 import (
 	"context"
+	"errors"
 	"sync"
+	"time"
 
 	"github.com/olicesx/quic-go/internal/protocol"
 	"github.com/olicesx/quic-go/internal/utils"
@@ -33,6 +35,19 @@ const (
 	// caps the pool's footprint while still absorbing line-rate bursts.
 	maxDatagramBufPoolLen = 256
 )
+
+// datagramSendQueueFullTimeout bounds how long Add waits on a full send queue
+// before dropping the datagram and returning errDatagramQueueFullTimeout. It
+// is a var so tests can shorten the wait. The production value sits well above
+// a normal backpressure burst (seconds) and below a QUIC peer's idle timeout
+// (60s in the hy2 client), so a genuinely stalled transport is surfaced to the
+// caller before the connection itself tears down.
+var datagramSendQueueFullTimeout = 30 * time.Second
+
+// ErrDatagramQueueFullTimeout is returned by Add when the send queue stayed
+// full for datagramSendQueueFullTimeout. The datagram was dropped and the
+// connection is still alive; callers may retry with a later datagram.
+var ErrDatagramQueueFullTimeout = errors.New("datagram send queue full: timed out")
 
 // datagramBufPool recycles the receive-side datagram buffers. Incoming
 // DATAGRAM frames are copied out of the packet buffer into one of these,
@@ -113,8 +128,11 @@ func newDatagramQueue(hasData func(), logger utils.Logger) *datagramQueue {
 }
 
 // Add queues a new DATAGRAM frame for sending.
-// Up to 32 DATAGRAM frames will be queued.
-// Once that limit is reached, Add blocks until the queue size has reduced.
+// Up to maxDatagramSendQueueLen DATAGRAM frames will be queued.
+// Once that limit is reached, Add blocks until the queue size has reduced or
+// datagramSendQueueFullTimeout elapses, whichever comes first. The timeout
+// keeps a stalled transport bounded: without it a sender parked on a full
+// queue waits forever, which would strand shared dispatcher workers.
 func (h *datagramQueue) Add(f *wire.DatagramFrame) error {
 	h.sendMx.Lock()
 
@@ -130,13 +148,22 @@ func (h *datagramQueue) Add(f *wire.DatagramFrame) error {
 		default:
 		}
 		h.sendMx.Unlock()
+		timer := time.NewTimer(datagramSendQueueFullTimeout)
 		select {
 		case <-h.closed:
 			// Connection closed while blocked on a full queue: the frame
 			// was never sent, return it to the pool.
+			timer.Stop()
 			wire.PutDatagramFrame(f)
 			return h.closeErr
 		case <-h.sent:
+			timer.Stop()
+		case <-timer.C:
+			// Queue stayed full for the whole timeout: the transport is
+			// stalled, not merely backpressured. Drop this datagram and
+			// surface a bounded error instead of parking forever.
+			wire.PutDatagramFrame(f)
+			return ErrDatagramQueueFullTimeout
 		}
 		h.sendMx.Lock()
 	}
