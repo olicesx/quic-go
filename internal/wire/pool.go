@@ -1,19 +1,53 @@
 package wire
 
 import (
-	"sync"
-
 	"github.com/olicesx/quic-go/internal/protocol"
 )
 
-var datagramFramePool sync.Pool
+// maxDatagramFramePoolLen bounds how many DATAGRAM frames are retained for
+// reuse. 256 x 1200B = ~300KB worst-case steady-state retention.
+const maxDatagramFramePoolLen = 256
 
-func init() {
-	datagramFramePool.New = func() interface{} {
-		return &DatagramFrame{
-			Data:     make([]byte, 0, MaxDatagramSize),
-			fromPool: true,
-		}
+// datagramFramePool recycles DATAGRAM frames with the same bounded channel
+// pattern as streamFramePool: sync.Pool is cleared on every GC cycle, which
+// under GC pressure leaves the pool permanently empty and turns every frame
+// into a fresh allocation, driving the GC harder.
+var datagramFramePool = newDatagramFramePool()
+
+type datagramFramePoolT struct {
+	ch chan *DatagramFrame
+}
+
+func newDatagramFramePool() *datagramFramePoolT {
+	p := &datagramFramePoolT{ch: make(chan *DatagramFrame, maxDatagramFramePoolLen)}
+	// warm the pool so the first bursts don't all allocate
+	for i := 0; i < maxDatagramFramePoolLen/4; i++ {
+		p.ch <- newPooledDatagramFrame()
+	}
+	return p
+}
+
+func newPooledDatagramFrame() *DatagramFrame {
+	return &DatagramFrame{
+		Data:     make([]byte, 0, MaxDatagramSize),
+		fromPool: true,
+	}
+}
+
+func (p *datagramFramePoolT) Get() *DatagramFrame {
+	select {
+	case f := <-p.ch:
+		return f
+	default:
+		return newPooledDatagramFrame()
+	}
+}
+
+func (p *datagramFramePoolT) Put(f *DatagramFrame) {
+	select {
+	case p.ch <- f:
+	default:
+		// pool full: drop the frame, GC reclaims it
 	}
 }
 
@@ -74,7 +108,7 @@ func GetStreamFrame() *StreamFrame {
 // Data buffer has capacity MaxDatagramSize and must be re-sliced before use.
 // Return the frame with PutDatagramFrame once it has been packed.
 func GetDatagramFrame() *DatagramFrame {
-	return datagramFramePool.Get().(*DatagramFrame)
+	return datagramFramePool.Get()
 }
 
 // PutDatagramFrame returns a pooled DatagramFrame (and its Data buffer) to
