@@ -1,6 +1,8 @@
 package quic
 
 import (
+	"sync"
+
 	"github.com/olicesx/quic-go/internal/protocol"
 )
 
@@ -64,72 +66,27 @@ func (b *packetBuffer) putBack() {
 	panic("putPacketBuffer called with packet of wrong size!")
 }
 
-// maxPacketBufferPoolLen bounds how many packet buffers are retained for
-// reuse. It must cover the buffers in flight between ReadPacket and the
-// completion of packet processing (batch reads of up to 256 packets, plus
-// per-connection processing queues). 4096 x 1452B = ~6MB worst-case.
-const maxPacketBufferPoolLen = 4096
-
-// maxLargePacketBufferPoolLen bounds the GSO-sized buffers used for
-// sending. 256 x 20KiB = ~5MB worst-case.
-const maxLargePacketBufferPoolLen = 256
-
-// packetBufferPool is a bounded channel pool. A sync.Pool is cleared on every
-// GC cycle, so under traffic every received packet allocates a fresh 1452B
-// packetBuffer, which drives the GC harder (allocation spiral). The channel
-// pool is allocation-free on the hot path, survives GC, and is capped.
-type packetBufferPool struct {
-	ch         chan *packetBuffer
-	bufferSize int
-}
-
-func newPacketBufferPool(size int, bufferSize int) *packetBufferPool {
-	p := &packetBufferPool{
-		ch:         make(chan *packetBuffer, size),
-		bufferSize: bufferSize,
-	}
-	// Warm the pool so the first batches don't all allocate.
-	warmup := min(size, 1024)
-	for i := 0; i < warmup; i++ {
-		p.ch <- newPacketBuffer(bufferSize)
-	}
-	return p
-}
-
-func newPacketBuffer(bufferSize int) *packetBuffer {
-	return &packetBuffer{Data: make([]byte, 0, bufferSize)}
-}
-
-func (p *packetBufferPool) Get() *packetBuffer {
-	select {
-	case b := <-p.ch:
-		return b
-	default:
-		return newPacketBuffer(p.bufferSize)
-	}
-}
-
-func (p *packetBufferPool) Put(b *packetBuffer) {
-	select {
-	case p.ch <- b:
-	default:
-		// Pool full: drop the buffer, GC reclaims it.
-	}
-}
-
-var bufferPool = newPacketBufferPool(maxPacketBufferPoolLen, protocol.MaxPacketBufferSize)
-var largeBufferPool = newPacketBufferPool(maxLargePacketBufferPoolLen, protocol.MaxLargePacketBufferSize)
+var bufferPool, largeBufferPool sync.Pool
 
 func getPacketBuffer() *packetBuffer {
-	buf := bufferPool.Get()
+	buf := bufferPool.Get().(*packetBuffer)
 	buf.refCount = 1
 	buf.Data = buf.Data[:0]
 	return buf
 }
 
 func getLargePacketBuffer() *packetBuffer {
-	buf := largeBufferPool.Get()
+	buf := largeBufferPool.Get().(*packetBuffer)
 	buf.refCount = 1
 	buf.Data = buf.Data[:0]
 	return buf
+}
+
+func init() {
+	bufferPool.New = func() any {
+		return &packetBuffer{Data: make([]byte, 0, protocol.MaxPacketBufferSize)}
+	}
+	largeBufferPool.New = func() any {
+		return &packetBuffer{Data: make([]byte, 0, protocol.MaxLargePacketBufferSize)}
+	}
 }

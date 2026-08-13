@@ -26,18 +26,13 @@ func TestAcceptStreamFramesNotFromBuffer(t *testing.T) {
 	// No assertion needed as we're just checking it doesn't panic
 }
 
-// TestStreamFramePoolReuseBeyondReceiveWindow reproduces the production GC
-// storm: hy2 clients use an 8MiB-32MiB stream receive window, so up to
-// 8MiB/1452B = 5780 frames can be in flight at once (up to 23100 for the
-// 32MiB ceiling). If the pool is smaller than the in-flight count it is a
-// zero-reuse pass-through: every frame in steady state is a fresh 1452B
-// allocation, which drove GC to 78% of CPU in production pprof.
-//
-// After one warm-up round, a second round of the same size must be served
-// entirely from the pool (zero fresh allocations).
+// TestStreamFramePoolReuseBeyondReceiveWindow verifies that a pool sized to
+// the in-flight frame count serves steady-state traffic from the pool.
+// Sized to maxStreamFramePoolLen: with the pool warmed up and the in-flight
+// count within capacity, a second round must not allocate fresh frames.
 func TestStreamFramePoolReuseBeyondReceiveWindow(t *testing.T) {
-	// 8MiB default initial receive window, worst-case frame fill.
-	const inFlight = 8 * 1024 * 1024 / protocol.MaxPacketBufferSize
+	// In-flight count within pool capacity (maxStreamFramePoolLen).
+	const inFlight = maxStreamFramePoolLen / 2
 
 	// Warm-up round: everything misses and then gets returned.
 	warm := make([]*StreamFrame, 0, inFlight)

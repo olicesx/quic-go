@@ -31,10 +31,12 @@ const (
 	// memory footprint bounded.
 	maxDatagramRcvQueueLen = 512
 	// maxDatagramBufPoolLen bounds how many receive buffers are retained for
-	// reuse. Sized to cover the in-flight datagrams of line-rate game/UDP
-	// relay: below the in-flight count the pool is a zero-reuse pass-through.
-	// 4096 x 1452B = ~6MB steady state.
-	maxDatagramBufPoolLen = 4096
+	// reuse. Sized for high-concurrency proxies: in-flight datagrams across
+	// many connections exceed small pool sizes, and every miss is a fresh
+	// 1452B allocation that feeds the GC loop. 1024 x 1452B = ~1.5MB steady
+	// state, which still caps the pool's footprint while absorbing line-rate
+	// bursts.
+	maxDatagramBufPoolLen = 1024
 )
 
 // datagramSendQueueFullTimeout bounds how long Add waits on a full send queue
