@@ -36,7 +36,7 @@ type Val[T any] interface {
 	Match(cond T) int8 // returns 1 if > cond, -1 if < cond, 0 if matches cond
 }
 
-const maxNodePoolSize = 512
+const maxNodePoolSize = 2048
 
 // Btree represents an AVL tree
 type Btree[T Val[T]] struct {
@@ -44,6 +44,10 @@ type Btree[T Val[T]] struct {
 	values   []T
 	len      int
 	nodePool []*Node[T]
+	// matchBuf reuses the slice returned by Match. Callers must not retain
+	// the returned slice across Match calls (single-goroutine use only,
+	// which is how the frame sorter uses it).
+	matchBuf []T
 }
 
 // Node represents a node in the tree with a value, left and right children, and a height/balance of the node.
@@ -200,10 +204,11 @@ func (t *Btree[T]) Get(value T) *T {
 }
 
 func (t *Btree[T]) Match(cond T) []T {
-	var matches []T
+	matches := t.matchBuf[:0]
 	if t.root != nil {
 		t.root.match(cond, &matches)
 	}
+	t.matchBuf = matches
 	return matches
 }
 
@@ -313,9 +318,6 @@ func (t *Btree[T]) deleteNode(n *Node[T], value T, deleted *bool) *Node[T] {
 	}
 
 	// re-balance
-	if n == nil {
-		return n
-	}
 	n.height = n.maxHeight() + 1
 	bal := balance(n)
 	if bal > 1 {
