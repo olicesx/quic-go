@@ -5,8 +5,8 @@ import (
 )
 
 // maxDatagramFramePoolLen bounds how many DATAGRAM frames are retained for
-// reuse. 256 x 1200B = ~300KB worst-case steady-state retention.
-const maxDatagramFramePoolLen = 256
+// reuse. 1024 x 1200B = ~1.2MB worst-case steady-state retention.
+const maxDatagramFramePoolLen = 1024
 
 // datagramFramePool recycles DATAGRAM frames with the same bounded channel
 // pattern as streamFramePool: sync.Pool is cleared on every GC cycle, which
@@ -52,8 +52,10 @@ func (p *datagramFramePoolT) Put(f *DatagramFrame) {
 }
 
 // maxStreamFramePoolLen bounds how many STREAM frames are retained for reuse.
-// 256 x 1452B = ~372KB worst-case steady-state retention.
-const maxStreamFramePoolLen = 256
+// Sized for high-concurrency proxies: in-flight frames across many
+// connections exceed small pool sizes, and every miss is a fresh 1452B
+// allocation that feeds the GC loop. 1024 x 1452B = ~1.5MB steady state.
+const maxStreamFramePoolLen = 1024
 
 // streamFramePool recycles STREAM frames. A bounded channel pool is used
 // instead of sync.Pool: sync.Pool is cleared on every GC cycle, and under GC
