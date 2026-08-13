@@ -350,6 +350,10 @@ func TestConstantDelay(t *testing.T) { // no reordering expected here
 	for i := 0; i < 100; i++ {
 		_, err := clientConn.Write(makePacket(t, protocol.PacketNumber(i), []byte("foobar"+strconv.Itoa(i))))
 		require.NoError(t, err)
+		// Pace the writes: a full-speed burst can reorder packets inside the
+		// loopback stack under load (observed on WSL2), which this test must
+		// not treat as proxy reordering.
+		time.Sleep(time.Millisecond)
 	}
 	require.Eventually(t, func() bool { return len(serverReceivedPackets) == 100 }, 5*time.Second, 10*time.Millisecond)
 	timeout := time.After(5 * time.Second)

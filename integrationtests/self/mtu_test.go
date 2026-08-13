@@ -13,6 +13,7 @@ import (
 	"github.com/olicesx/quic-go"
 	quicproxy "github.com/olicesx/quic-go/integrationtests/tools/proxy"
 	"github.com/olicesx/quic-go/internal/protocol"
+	"github.com/olicesx/quic-go/internal/wire"
 	"github.com/olicesx/quic-go/logging"
 
 	"github.com/stretchr/testify/require"
@@ -179,7 +180,10 @@ func TestPathMTUDiscovery(t *testing.T) {
 	require.GreaterOrEqual(t, maxPacketSizeClient, mtu-25)
 	const maxDiff = 40 // this includes the 21 bytes for the short header, 16 bytes for the encryption tag, and framing overhead
 	require.GreaterOrEqual(t, int(initialMaxDatagramSize), protocol.MinInitialPacketSize-maxDiff)
-	require.GreaterOrEqual(t, int(finalMaxDatagramSize), maxPacketSizeClient-maxDiff)
+	// The client's outgoing datagram size is also bounded by the server's
+	// max_datagram_frame_size transport parameter (wire.MaxDatagramSize),
+	// minus up to 3 bytes of DATAGRAM frame header.
+	require.GreaterOrEqual(t, int(finalMaxDatagramSize), min(int(wire.MaxDatagramSize)-3, maxPacketSizeClient-maxDiff))
 	// MTU discovery was disabled on the server side
 	require.Equal(t, 1234, maxPacketSizeServer)
 

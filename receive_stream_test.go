@@ -118,6 +118,39 @@ func TestReceiveStreamBlockRead(t *testing.T) {
 	require.NoError(t, <-errChan)
 }
 
+// TestReceiveStreamReleasesPooledFrameOnFlowControlError reproduces the
+// production frame leak: a frame rejected by the flow controller was never
+// returned to the pool, starving it and forcing every later frame to
+// allocate a fresh 1452B buffer.
+func TestReceiveStreamReleasesPooledFrameOnFlowControlError(t *testing.T) {
+	mockCtrl := gomock.NewController(t)
+	mockFC := mocks.NewMockStreamFlowController(mockCtrl)
+	str := newReceiveStream(42, nil, mockFC)
+
+	f := wire.GetStreamFrame()
+	f.Data = f.Data[:4]
+	before := wire.StreamFramePoolLen()
+	mockFC.EXPECT().UpdateHighestReceived(gomock.Any(), false, gomock.Any()).Return(errors.New("flow control violation"))
+	require.Error(t, str.handleStreamFrame(f, time.Now()))
+	require.Equal(t, before+1, wire.StreamFramePoolLen(), "rejected pooled frame must be returned to the pool")
+}
+
+// TestReceiveStreamReleasesPooledFrameWhenCancelled verifies the same for
+// frames arriving after the stream was cancelled locally.
+func TestReceiveStreamReleasesPooledFrameWhenCancelled(t *testing.T) {
+	mockCtrl := gomock.NewController(t)
+	mockFC := mocks.NewMockStreamFlowController(mockCtrl)
+	str := newReceiveStream(42, nil, mockFC)
+	str.cancelledLocally = true
+
+	f := wire.GetStreamFrame()
+	f.Data = f.Data[:4]
+	before := wire.StreamFramePoolLen()
+	mockFC.EXPECT().UpdateHighestReceived(gomock.Any(), false, gomock.Any())
+	require.NoError(t, str.handleStreamFrame(f, time.Now()))
+	require.Equal(t, before+1, wire.StreamFramePoolLen(), "frame on a cancelled stream must be returned to the pool")
+}
+
 func TestReceiveStreamReadOverlappingData(t *testing.T) {
 	mockCtrl := gomock.NewController(t)
 	mockFC := mocks.NewMockStreamFlowController(mockCtrl)

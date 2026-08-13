@@ -288,15 +288,18 @@ func (s *receiveStream) handleStreamFrame(frame *wire.StreamFrame, now time.Time
 func (s *receiveStream) handleStreamFrameImpl(frame *wire.StreamFrame, now time.Time) error {
 	maxOffset := frame.Offset + frame.DataLen()
 	if err := s.flowController.UpdateHighestReceived(maxOffset, frame.Fin, now); err != nil {
+		frame.PutBack()
 		return err
 	}
 	if frame.Fin {
 		s.finalOffset = maxOffset
 	}
 	if s.cancelledLocally {
+		frame.PutBack()
 		return nil
 	}
 	if err := s.frameQueue.Push(frame.Data, frame.Offset, frame.PutBack); err != nil {
+		frame.PutBack()
 		return err
 	}
 	s.signalRead()

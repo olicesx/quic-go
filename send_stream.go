@@ -421,7 +421,7 @@ func (s *sendStream) Close() error {
 	return nil
 }
 
-// returnFramesToPool returns all queued frames to the sync.Pool
+// returnFramesToPool returns all queued frames to the frame pool
 func (s *sendStream) returnFramesToPool() {
 	for _, f := range s.retransmissionQueue {
 		f.PutBack()
@@ -469,7 +469,7 @@ func (s *sendStream) cancelWrite(errorCode qerr.StreamErrorCode, remote bool) {
 	s.finalError = &StreamError{StreamID: s.streamID, ErrorCode: errorCode, Remote: remote}
 	s.ctxCancel(s.finalError)
 	s.numOutstandingFrames = 0
-		s.returnFramesToPool()
+	s.returnFramesToPool()
 	s.queuedResetStreamFrame = &wire.ResetStreamFrame{
 		StreamID:  s.streamID,
 		FinalSize: s.writeOffset,
@@ -535,6 +535,7 @@ func (s *sendStream) closeForShutdown(err error) {
 		s.finalError = err
 		s.returnFramesToPool()
 	}
+	s.closedForShutdown = true
 	s.mutex.Unlock()
 	s.signalWrite()
 }

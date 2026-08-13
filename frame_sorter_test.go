@@ -1374,6 +1374,21 @@ func TestFrameSorterTooManyGaps(t *testing.T) {
 	require.EqualError(t, err, "too many gaps in received data")
 }
 
+// TestFrameSorterTooManyGapsReleasesFrame verifies that a frame rejected for
+// exceeding the gap limit has its release callback invoked. Callers hand a
+// pooled frame's PutBack as the callback, so rejecting the frame without
+// invoking it leaks the pooled frame.
+func TestFrameSorterTooManyGapsReleasesFrame(t *testing.T) {
+	s := newFrameSorter()
+	for i := 0; i < protocol.MaxStreamFrameSorterGaps; i++ {
+		require.NoError(t, s.Push([]byte("foobar"), protocol.ByteCount(i*7), nil))
+	}
+	cb, called := getFrameSorterTestCallback(t)
+	err := s.Push([]byte("foobar"), protocol.ByteCount(protocol.MaxStreamFrameSorterGaps*7)+100, cb)
+	require.EqualError(t, err, "too many gaps in received data")
+	require.True(t, called.WasCalled(), "release callback must be invoked for rejected frames")
+}
+
 func TestFrameSorterRandomized(t *testing.T) {
 	t.Run("short", func(t *testing.T) {
 		testFrameSorterRandomized(t, 25, false, false)

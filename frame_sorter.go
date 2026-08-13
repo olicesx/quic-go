@@ -179,6 +179,9 @@ func (s *frameSorter) push(data []byte, offset protocol.ByteCount, doneCb func()
 	}
 
 	if s.gapTree.Len() > protocol.MaxStreamFrameSorterGaps {
+		if doneCb != nil {
+			doneCb()
+		}
 		return errors.New("too many gaps in received data")
 	}
 

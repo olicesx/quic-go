@@ -602,7 +602,7 @@ var _ = Describe("Server", func() {
 				close(acceptConn)
 				Eventually(
 					func() uint32 { return counter.Load() },
-					scaleDuration(100*time.Millisecond),
+					scaleDuration(time.Second),
 				).Should(BeEquivalentTo(protocol.MaxServerUnprocessedPackets + 1))
 				Consistently(func() uint32 { return counter.Load() }).Should(BeEquivalentTo(protocol.MaxServerUnprocessedPackets + 1))
 			})

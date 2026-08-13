@@ -64,7 +64,7 @@ func newSendConn(c rawConn, remote net.Addr, info packetInfo, logger utils.Logge
 
 func (c *sconn) Write(p []byte, gsoSize uint16, ecn protocol.ECN) error {
 	remoteAddr := c.remoteAddr.Load().(net.Addr)
-	_, err := c.WritePacket(p, remoteAddr, c.packetInfoOOB, gsoSize, ecn)
+	err := c.writePacket(p, remoteAddr, c.packetInfoOOB, gsoSize, ecn)
 	if err != nil && isGSOError(err) {
 		// disable GSO for future calls
 		c.gotGSOError = true

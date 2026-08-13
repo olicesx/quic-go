@@ -59,12 +59,18 @@ func newQueue() *queue {
 	return &queue{timer: utils.NewTimer()}
 }
 
+// minReorderDelay is the smallest deadline difference that triggers a
+// reorder. Stamp noise (scheduling pauses and virtualized clock jitter of a
+// few microseconds to a few milliseconds) must not reorder packets; only
+// delays that are actually different by a meaningful amount may.
+const minReorderDelay = 50 * time.Millisecond
+
 func (q *queue) Add(e packetEntry) {
 	q.Lock()
 	q.Packets = append(q.Packets, e)
 	if len(q.Packets) > 1 {
 		lastIndex := len(q.Packets) - 1
-		if q.Packets[lastIndex].Time.Before(q.Packets[lastIndex-1].Time) {
+		if q.Packets[lastIndex].Time.Add(minReorderDelay).Before(q.Packets[lastIndex-1].Time) {
 			sort.Stable(q.Packets)
 		}
 	}
@@ -258,6 +264,12 @@ func (p *QuicProxy) runProxy() error {
 		if err != nil {
 			return err
 		}
+		// Stamp the arrival time immediately after reading: any scheduling
+		// pause between the read and the stamp below would make this packet's
+		// deadline later than packets read after it, and queue.Add would then
+		// reorder it behind them (observed as packet reordering under load on
+		// virtualized clocks).
+		now := time.Now()
 		raw := buffer[0:n]
 
 		saddr := cliaddr.String()
@@ -292,7 +304,6 @@ func (p *QuicProxy) runProxy() error {
 				return err
 			}
 		} else {
-			now := time.Now()
 			if p.logger.Debug() {
 				p.logger.Debugf("delaying incoming packet (%d bytes) to %s by %s", len(raw), conn.ServerConn.RemoteAddr(), delay)
 			}
@@ -311,6 +322,8 @@ func (p *QuicProxy) runOutgoingConnection(conn *connection) error {
 			if err != nil {
 				return
 			}
+			// Stamp the arrival time immediately after reading (see runProxy).
+			now := time.Now()
 			raw := buffer[0:n]
 
 			if p.dropPacket(DirectionOutgoing, raw) {
@@ -329,7 +342,6 @@ func (p *QuicProxy) runOutgoingConnection(conn *connection) error {
 					return
 				}
 			} else {
-				now := time.Now()
 				if p.logger.Debug() {
 					p.logger.Debugf("delaying outgoing packet (%d bytes) to %s by %s", len(raw), conn.ClientAddr, delay)
 				}

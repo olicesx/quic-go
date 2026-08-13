@@ -8,6 +8,10 @@ import (
 // reuse. 4096 x 1200B = ~4.9MB worst-case steady-state retention.
 const maxDatagramFramePoolLen = 4096
 
+// poolWarmupLen is how many frames each pool is pre-filled with at startup.
+// It only covers the first bursts; pools then grow to their steady-state size.
+const poolWarmupLen = 1024
+
 // datagramFramePool recycles DATAGRAM frames with the same bounded channel
 // pattern as streamFramePool: sync.Pool is cleared on every GC cycle, which
 // under GC pressure leaves the pool permanently empty and turns every frame
@@ -21,7 +25,7 @@ type datagramFramePoolT struct {
 func newDatagramFramePool() *datagramFramePoolT {
 	p := &datagramFramePoolT{ch: make(chan *DatagramFrame, maxDatagramFramePoolLen)}
 	// warm the pool so the first bursts don't all allocate
-	for i := 0; i < maxDatagramFramePoolLen/4; i++ {
+	for i := 0; i < poolWarmupLen; i++ {
 		p.ch <- newPooledDatagramFrame()
 	}
 	return p
@@ -52,11 +56,15 @@ func (p *datagramFramePoolT) Put(f *DatagramFrame) {
 }
 
 // maxStreamFramePoolLen bounds how many STREAM frames are retained for reuse.
-// Sized to cover the in-flight frames of line-rate TCP-over-QUIC: below the
-// in-flight count the pool is a zero-reuse pass-through (every frame misses
-// and every Put is immediately consumed), which showed up as sustained GC
-// pressure at peak throughput. 4096 x 1452B = ~6MB steady state.
-const maxStreamFramePoolLen = 4096
+// The pool must cover the in-flight frame count of line-rate traffic, which
+// is bounded by the stream receive window: hy2 clients use an 8MiB-32MiB
+// receive window, i.e. up to 32MiB/1452B = 23100 frames in flight at once.
+// Below the in-flight count the pool is a zero-reuse pass-through (every
+// frame misses and every Put is immediately consumed), which showed up in
+// production pprof as sustained GC pressure at peak throughput (78% GC CPU).
+// 32768 x 1452B = ~47.6MB worst-case retention; the retained memory only
+// holds frame data that is in flight anyway, so it costs nothing extra.
+const maxStreamFramePoolLen = 32768
 
 // streamFramePool recycles STREAM frames. A bounded channel pool is used
 // instead of sync.Pool: sync.Pool is cleared on every GC cycle, and under GC
@@ -73,7 +81,7 @@ type streamFramePoolT struct {
 func newStreamFramePool() *streamFramePoolT {
 	p := &streamFramePoolT{ch: make(chan *StreamFrame, maxStreamFramePoolLen)}
 	// warm the pool so the first bursts don't all allocate
-	for i := 0; i < maxStreamFramePoolLen/4; i++ {
+	for i := 0; i < poolWarmupLen; i++ {
 		p.ch <- newPooledStreamFrame()
 	}
 	return p
@@ -105,6 +113,13 @@ func (p *streamFramePoolT) Put(f *StreamFrame) {
 
 func GetStreamFrame() *StreamFrame {
 	return streamFramePool.Get()
+}
+
+// StreamFramePoolLen returns the number of frames currently held in the pool.
+// Exported for tests and operational observability (a pool stuck at its
+// warm-up size while frames are being received indicates a frame leak).
+func StreamFramePoolLen() int {
+	return len(streamFramePool.ch)
 }
 
 // GetDatagramFrame returns a DatagramFrame from the shared pool. The frame's

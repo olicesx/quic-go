@@ -2,86 +2,86 @@ package handshake
 
 import (
 	"crypto"
-	"crypto/cipher"
-	"crypto/tls"
+	"encoding/binary"
+	"io"
 	"testing"
-	"unsafe"
-
-	"golang.org/x/exp/rand"
 
 	"github.com/stretchr/testify/require"
+	"golang.org/x/crypto/hkdf"
+	"golang.org/x/exp/rand"
 )
 
-type cipherSuiteTLS13 struct {
-	ID     uint16
-	KeyLen int
-	AEAD   func(key, fixedNonce []byte) cipher.AEAD
-	Hash   crypto.Hash
-}
+// hkdfExpandLabelReference is a straightforward implementation of
+// HKDF-Expand-Label from RFC 8446, Section 7.1, built only on public APIs:
+//
+//	HKDF-Expand-Label(Secret, Label, Context, Length) =
+//	    HKDF-Expand(Secret, HkdfLabel, Length)
+//
+// It serves as the correctness oracle for the optimized hkdfExpandLabel. It
+// replaces a //go:linkname hook into crypto/tls internals
+// (crypto/tls.(*cipherSuiteTLS13).expandLabel) that no longer exists in
+// Go 1.25+.
+func hkdfExpandLabelReference(hash crypto.Hash, secret, context []byte, label string, length int) []byte {
+	labelWithPrefix := "tls13 " + label
+	hkdfLabel := make([]byte, 2+1+len(labelWithPrefix)+1+len(context))
+	binary.BigEndian.PutUint16(hkdfLabel[:2], uint16(length))
+	hkdfLabel[2] = uint8(len(labelWithPrefix))
+	offset := 3
+	copy(hkdfLabel[offset:], labelWithPrefix)
+	offset += len(labelWithPrefix)
+	hkdfLabel[offset] = uint8(len(context))
+	offset++
+	copy(hkdfLabel[offset:], context)
 
-//go:linkname cipherSuitesTLS13 crypto/tls.cipherSuitesTLS13
-var cipherSuitesTLS13 []unsafe.Pointer
-
-func cipherSuiteTLS13ByID(id uint16) *cipherSuiteTLS13 {
-	for _, v := range cipherSuitesTLS13 {
-		cs := (*cipherSuiteTLS13)(v)
-		if cs.ID == id {
-			return cs
-		}
+	out := make([]byte, length)
+	r := hkdf.Expand(hash.New, secret, hkdfLabel)
+	if _, err := io.ReadFull(r, out); err != nil {
+		panic(err)
 	}
-	return nil
+	return out
 }
-
-//go:linkname expandLabel crypto/tls.(*cipherSuiteTLS13).expandLabel
-func expandLabel(cs *cipherSuiteTLS13, secret []byte, label string, context []byte, length int) []byte
 
 func TestHKDF(t *testing.T) {
 	testCases := []struct {
-		name        string
-		cipherSuite uint16
-		secret      []byte
-		context     []byte
-		label       string
-		length      int
+		name string
+		hash crypto.Hash
 	}{
-		{"TLS_AES_128_GCM_SHA256", tls.TLS_AES_128_GCM_SHA256, []byte("secret"), []byte("context"), "label", 42},
-		{"TLS_AES_256_GCM_SHA384", tls.TLS_AES_256_GCM_SHA384, []byte("secret"), []byte("context"), "label", 100},
-		{"TLS_CHACHA20_POLY1305_SHA256", tls.TLS_CHACHA20_POLY1305_SHA256, []byte("secret"), []byte("context"), "label", 77},
+		{"TLS_AES_128_GCM_SHA256", crypto.SHA256},
+		{"TLS_AES_256_GCM_SHA384", crypto.SHA384},
+		{"TLS_CHACHA20_POLY1305_SHA256", crypto.SHA256},
 	}
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			cs := cipherSuiteTLS13ByID(tc.cipherSuite)
-			expected := expandLabel(cs, tc.secret, tc.label, tc.context, tc.length)
-			expanded := hkdfExpandLabel(cs.Hash, tc.secret, tc.context, tc.label, tc.length)
+			secret := []byte("secret")
+			context := []byte("context")
+			label := "label"
+			length := 42
+			expected := hkdfExpandLabelReference(tc.hash, secret, context, label, length)
+			expanded := hkdfExpandLabel(tc.hash, secret, context, label, length)
 			require.Equal(t, expected, expanded)
 		})
 	}
 }
 
-func BenchmarkHKDFExpandLabelStandardLibrary(b *testing.B) {
-	b.Run("TLS_AES_128_GCM_SHA256", func(b *testing.B) { benchmarkHKDFExpandLabel(b, tls.TLS_AES_128_GCM_SHA256, true) })
-	b.Run("TLS_AES_256_GCM_SHA384", func(b *testing.B) { benchmarkHKDFExpandLabel(b, tls.TLS_AES_256_GCM_SHA384, true) })
-	b.Run("TLS_CHACHA20_POLY1305_SHA256", func(b *testing.B) { benchmarkHKDFExpandLabel(b, tls.TLS_CHACHA20_POLY1305_SHA256, true) })
+func BenchmarkHKDFExpandLabelReference(b *testing.B) {
+	benchmarkHKDFExpandLabel(b, crypto.SHA256, true)
 }
 
 func BenchmarkHKDFExpandLabelOptimized(b *testing.B) {
-	b.Run("TLS_AES_128_GCM_SHA256", func(b *testing.B) { benchmarkHKDFExpandLabel(b, tls.TLS_AES_128_GCM_SHA256, false) })
-	b.Run("TLS_AES_256_GCM_SHA384", func(b *testing.B) { benchmarkHKDFExpandLabel(b, tls.TLS_AES_256_GCM_SHA384, false) })
-	b.Run("TLS_CHACHA20_POLY1305_SHA256", func(b *testing.B) { benchmarkHKDFExpandLabel(b, tls.TLS_CHACHA20_POLY1305_SHA256, false) })
+	benchmarkHKDFExpandLabel(b, crypto.SHA256, false)
 }
 
-func benchmarkHKDFExpandLabel(b *testing.B, cipherSuite uint16, useStdLib bool) {
+func benchmarkHKDFExpandLabel(b *testing.B, hash crypto.Hash, useReference bool) {
 	b.ReportAllocs()
-	cs := cipherSuiteTLS13ByID(cipherSuite)
 	secret := make([]byte, 32)
 	rand.Read(secret)
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		if useStdLib {
-			expandLabel(cs, secret, "label", []byte("context"), 42)
+		if useReference {
+			hkdfExpandLabelReference(hash, secret, []byte("context"), "label", 42)
 		} else {
-			hkdfExpandLabel(cs.Hash, secret, []byte("context"), "label", 42)
+			hkdfExpandLabel(hash, secret, []byte("context"), "label", 42)
 		}
 	}
 }

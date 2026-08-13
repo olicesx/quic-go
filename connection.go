@@ -1462,9 +1462,11 @@ func (s *connection) handleHandshakeEvents(now time.Time) error {
 func (s *connection) handleStreamFrame(frame *wire.StreamFrame, rcvTime time.Time) error {
 	str, err := s.streamsMap.GetOrOpenReceiveStream(frame.StreamID)
 	if err != nil {
+		frame.PutBack()
 		return err
 	}
 	if str == nil { // stream was already closed and garbage collected
+		frame.PutBack()
 		return nil
 	}
 	return str.handleStreamFrame(frame, rcvTime)
@@ -1582,6 +1584,7 @@ func (s *connection) handleAckFrame(frame *wire.AckFrame, encLevel protocol.Encr
 
 func (s *connection) handleDatagramFrame(f *wire.DatagramFrame) error {
 	if f.Length(s.version) > wire.MaxDatagramSize {
+		wire.PutDatagramFrame(f)
 		return &qerr.TransportError{
 			ErrorCode:    qerr.ProtocolViolation,
 			ErrorMessage: "DATAGRAM frame too large",

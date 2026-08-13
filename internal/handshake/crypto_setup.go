@@ -362,6 +362,11 @@ func (h *cryptoSetup) GetSessionTicket() ([]byte, error) {
 		return nil, err
 	}
 	ev := h.conn.NextEvent()
+	if ev.Kind == tls.QUICNoEvent {
+		// Go 1.25+: SendSessionTicket succeeds silently without producing an
+		// event when session tickets are disabled.
+		return nil, nil
+	}
 	if ev.Kind != tls.QUICWriteData || ev.Level != tls.QUICEncryptionLevelApplication {
 		panic("crypto/tls bug: where's my session ticket?")
 	}

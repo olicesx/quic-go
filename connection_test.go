@@ -247,6 +247,27 @@ func TestConnectionHandleReceiveStreamFrames(t *testing.T) {
 		require.NoError(t, tc.conn.handleFrame(sdbf, protocol.Encryption1RTT, connID, now))
 	})
 
+	// A pooled STREAM frame for a closed or invalid stream must be returned
+	// to the pool; dropping it leaks the frame and starves the pool.
+	t.Run("releases pooled frame for closed and invalid streams", func(t *testing.T) {
+		mockCtrl := gomock.NewController(t)
+		streamsMap := NewMockStreamManager(mockCtrl)
+		tc := newServerTestConnection(t, mockCtrl, nil, false, connectionOptStreamManager(streamsMap))
+
+		before := wire.StreamFramePoolLen()
+		pooled := wire.GetStreamFrame()
+		pooled.StreamID = streamID
+		streamsMap.EXPECT().GetOrOpenReceiveStream(streamID).Return(nil, nil)
+		require.NoError(t, tc.conn.handleFrame(pooled, protocol.Encryption1RTT, connID, now))
+		require.Equal(t, before, wire.StreamFramePoolLen(), "pooled frame for a closed stream must be returned to the pool")
+
+		pooled2 := wire.GetStreamFrame()
+		pooled2.StreamID = streamID
+		streamsMap.EXPECT().GetOrOpenReceiveStream(streamID).Return(nil, errors.New("test err"))
+		require.Error(t, tc.conn.handleFrame(pooled2, protocol.Encryption1RTT, connID, now))
+		require.Equal(t, before, wire.StreamFramePoolLen(), "pooled frame for an invalid stream must be returned to the pool")
+	})
+
 	t.Run("for invalid streams", func(t *testing.T) {
 		mockCtrl := gomock.NewController(t)
 		streamsMap := NewMockStreamManager(mockCtrl)
