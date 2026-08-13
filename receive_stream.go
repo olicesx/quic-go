@@ -33,7 +33,7 @@ type receiveStream struct {
 	finalOffset protocol.ByteCount
 
 	currentFrame       []byte
-	currentFrameDone   func()
+	currentFrameDone   frameReleaser
 	readPosInFrame     int
 	currentFrameIsLast bool // is the currentFrame the last frame on this stream
 
@@ -220,7 +220,7 @@ func (s *receiveStream) readImpl(p []byte) (hasStreamWindowUpdate bool, hasConnW
 		if s.readPosInFrame >= len(s.currentFrame) && s.currentFrameIsLast {
 			s.currentFrame = nil
 			if s.currentFrameDone != nil {
-				s.currentFrameDone()
+				s.currentFrameDone.PutBack()
 			}
 			s.errorRead = true
 			return hasStreamWindowUpdate, hasConnWindowUpdate, bytesRead, io.EOF
@@ -233,7 +233,7 @@ func (s *receiveStream) dequeueNextFrame() {
 	var offset protocol.ByteCount
 	// We're done with the last frame. Release the buffer.
 	if s.currentFrameDone != nil {
-		s.currentFrameDone()
+		s.currentFrameDone.PutBack()
 	}
 	offset, s.currentFrame, s.currentFrameDone = s.frameQueue.Pop()
 	s.currentFrameIsLast = offset+protocol.ByteCount(len(s.currentFrame)) >= s.finalOffset
@@ -298,8 +298,8 @@ func (s *receiveStream) handleStreamFrameImpl(frame *wire.StreamFrame, now time.
 		frame.PutBack()
 		return nil
 	}
-	if err := s.frameQueue.Push(frame.Data, frame.Offset, frame.PutBack); err != nil {
-		// frameSorter.push already called doneCb (= frame.PutBack) before
+	if err := s.frameQueue.Push(frame.Data, frame.Offset, frame); err != nil {
+		// frameSorter.push already called frame.PutBack before
 		// returning the gap-overflow error, so the frame is already back in
 		// the pool. Returning it again here would double-put the same
 		// pointer, corrupting the pool and causing concurrent reuse of one

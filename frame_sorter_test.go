@@ -14,22 +14,33 @@ import (
 
 type callbackTracker struct {
 	called *bool
-	cb     func()
+	cb     frameReleaser
+	t      *testing.T
 }
 
 func (t *callbackTracker) WasCalled() bool { return *t.called }
 
-func getFrameSorterTestCallback(t *testing.T) (func(), callbackTracker) {
-	var called bool
-	cb := func() {
-		if called {
-			t.Fatal("double free")
-		}
-		called = true
+// testReleaser implements frameReleaser to track when a frame is returned to
+// its pool, asserting it happens exactly once.
+type testReleaser struct {
+	called *bool
+	t      *testing.T
+}
+
+func (r *testReleaser) PutBack() {
+	if *r.called {
+		r.t.Fatal("double free")
 	}
+	*r.called = true
+}
+
+func getFrameSorterTestCallback(t *testing.T) (frameReleaser, callbackTracker) {
+	called := false
+	cb := &testReleaser{called: &called, t: t}
 	return cb, callbackTracker{
 		cb:     cb,
 		called: &called,
+		t:      t,
 	}
 }
 
@@ -55,7 +66,7 @@ func TestFrameSorterSimpleCases(t *testing.T) {
 	require.Equal(t, []byte("foo"), data)
 	require.Zero(t, offset)
 	require.NotNil(t, doneCb)
-	doneCb()
+	doneCb.PutBack()
 	require.True(t, t1.WasCalled())
 	require.False(t, t2.WasCalled())
 	require.True(t, s.HasMoreData())
@@ -64,7 +75,7 @@ func TestFrameSorterSimpleCases(t *testing.T) {
 	require.Equal(t, []byte("bar"), data)
 	require.Equal(t, protocol.ByteCount(3), offset)
 	require.NotNil(t, doneCb)
-	doneCb()
+	doneCb.PutBack()
 	require.True(t, t2.WasCalled())
 	require.False(t, s.HasMoreData())
 
@@ -1473,7 +1484,7 @@ func testFrameSorterRandomized(t *testing.T, dataLen protocol.ByteCount, injectD
 		require.Equal(t, offset, protocol.ByteCount(len(read)))
 		read = append(read, b...)
 		if cb != nil {
-			cb()
+			cb.PutBack()
 		}
 	}
 

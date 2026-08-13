@@ -14,9 +14,16 @@ type byteInterval struct {
 	End   protocol.ByteCount
 }
 
+// frameReleaser returns a pooled frame to its pool. Implemented by
+// *wire.StreamFrame. Passing the frame itself (instead of a closure over it)
+// avoids a heap-allocated done callback per received frame.
+type frameReleaser interface {
+	PutBack()
+}
+
 type frameSorterEntry struct {
-	Data   []byte
-	DoneCb func()
+	Data     []byte
+	Releaser frameReleaser
 }
 
 type frameSorter struct {
@@ -36,18 +43,18 @@ func newFrameSorter() *frameSorter {
 	return &s
 }
 
-func (s *frameSorter) Push(data []byte, offset protocol.ByteCount, doneCb func()) error {
-	err := s.push(data, offset, doneCb)
+func (s *frameSorter) Push(data []byte, offset protocol.ByteCount, releaser frameReleaser) error {
+	err := s.push(data, offset, releaser)
 	if err == errDuplicateStreamData {
-		if doneCb != nil {
-			doneCb()
+		if releaser != nil {
+			releaser.PutBack()
 		}
 		return nil
 	}
 	return err
 }
 
-func (s *frameSorter) push(data []byte, offset protocol.ByteCount, doneCb func()) error {
+func (s *frameSorter) push(data []byte, offset protocol.ByteCount, releaser frameReleaser) error {
 	if len(data) == 0 {
 		return errDuplicateStreamData
 	}
@@ -94,8 +101,8 @@ func (s *frameSorter) push(data []byte, offset protocol.ByteCount, doneCb func()
 			delete(s.queue, pos)
 			pos += oldEntryLen
 			hasReplacedAtLeastOne = true
-			if oldEntry.DoneCb != nil {
-				oldEntry.DoneCb()
+			if oldEntry.Releaser != nil {
+				oldEntry.Releaser.PutBack()
 			}
 		} else {
 			if !hasReplacedAtLeastOne {
@@ -172,20 +179,20 @@ func (s *frameSorter) push(data []byte, offset protocol.ByteCount, doneCb func()
 		newData := make([]byte, len(data))
 		copy(newData, data)
 		data = newData
-		if doneCb != nil {
-			doneCb()
-			doneCb = nil
+		if releaser != nil {
+			releaser.PutBack()
+			releaser = nil
 		}
 	}
 
 	if s.gapTree.Len() > protocol.MaxStreamFrameSorterGaps {
-		if doneCb != nil {
-			doneCb()
+		if releaser != nil {
+			releaser.PutBack()
 		}
 		return errors.New("too many gaps in received data")
 	}
 
-	s.queue[start] = frameSorterEntry{Data: data, DoneCb: doneCb}
+	s.queue[start] = frameSorterEntry{Data: data, Releaser: releaser}
 	return nil
 }
 
@@ -198,14 +205,14 @@ func (s *frameSorter) deleteConsecutive(pos protocol.ByteCount) {
 		}
 		oldEntryLen := protocol.ByteCount(len(oldEntry.Data))
 		delete(s.queue, pos)
-		if oldEntry.DoneCb != nil {
-			oldEntry.DoneCb()
+		if oldEntry.Releaser != nil {
+			oldEntry.Releaser.PutBack()
 		}
 		pos += oldEntryLen
 	}
 }
 
-func (s *frameSorter) Pop() (protocol.ByteCount, []byte, func()) {
+func (s *frameSorter) Pop() (protocol.ByteCount, []byte, frameReleaser) {
 	entry, ok := s.queue[s.readPos]
 	if !ok {
 		return s.readPos, nil, nil
@@ -213,7 +220,7 @@ func (s *frameSorter) Pop() (protocol.ByteCount, []byte, func()) {
 	delete(s.queue, s.readPos)
 	offset := s.readPos
 	s.readPos += protocol.ByteCount(len(entry.Data))
-	return offset, entry.Data, entry.DoneCb
+	return offset, entry.Data, entry.Releaser
 }
 
 // HasMoreData says if there is any more data queued at *any* offset.
