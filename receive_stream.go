@@ -299,7 +299,12 @@ func (s *receiveStream) handleStreamFrameImpl(frame *wire.StreamFrame, now time.
 		return nil
 	}
 	if err := s.frameQueue.Push(frame.Data, frame.Offset, frame.PutBack); err != nil {
-		frame.PutBack()
+		// frameSorter.push already called doneCb (= frame.PutBack) before
+		// returning the gap-overflow error, so the frame is already back in
+		// the pool. Returning it again here would double-put the same
+		// pointer, corrupting the pool and causing concurrent reuse of one
+		// frame's Data (data races, stream corruption, retransmission
+		// storms, GC pressure).
 		return err
 	}
 	s.signalRead()
