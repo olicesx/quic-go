@@ -227,3 +227,16 @@ func (s *frameSorter) Pop() (protocol.ByteCount, []byte, frameReleaser) {
 func (s *frameSorter) HasMoreData() bool {
 	return len(s.queue) > 0
 }
+
+// releaseAll returns every queued frame to its pool, including frames sitting
+// at unread gaps that Pop (which only yields the contiguous next frame) would
+// not reach. Used on abrupt stream close so out-of-order frames are not
+// stranded in the sorter.
+func (s *frameSorter) releaseAll() {
+	for pos, entry := range s.queue {
+		if entry.Releaser != nil {
+			entry.Releaser.PutBack()
+		}
+		delete(s.queue, pos)
+	}
+}

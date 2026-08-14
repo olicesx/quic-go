@@ -286,6 +286,12 @@ func (s *receiveStream) handleStreamFrame(frame *wire.StreamFrame, now time.Time
 }
 
 func (s *receiveStream) handleStreamFrameImpl(frame *wire.StreamFrame, now time.Time) error {
+	if s.closeForShutdownErr != nil {
+		// Stream is shutting down: don't queue the frame, return it now so it
+		// cannot be stranded after releasePendingFrames drained the queue.
+		frame.PutBack()
+		return nil
+	}
 	maxOffset := frame.Offset + frame.DataLen()
 	if err := s.flowController.UpdateHighestReceived(maxOffset, frame.Fin, now); err != nil {
 		frame.PutBack()
@@ -384,8 +390,25 @@ func (s *receiveStream) SetReadDeadline(t time.Time) error {
 func (s *receiveStream) closeForShutdown(err error) {
 	s.mutex.Lock()
 	s.closeForShutdownErr = err
+	s.releasePendingFrames()
 	s.mutex.Unlock()
 	s.signalRead()
+}
+
+// releasePendingFrames returns the in-flight current frame and every queued
+// frame (including out-of-order ones at gaps) to their pool. The caller must
+// hold s.mutex: every dequeueNextFrame call also runs under s.mutex (readImpl
+// holds the lock for its whole body, only releasing it to wait on readChan),
+// so a reader that wakes after shutdown observes currentFrameDone == nil and
+// an empty queue and cannot double-release. Must run before signalRead wakes
+// any waiting reader.
+func (s *receiveStream) releasePendingFrames() {
+	if s.currentFrameDone != nil {
+		s.currentFrameDone.PutBack()
+		s.currentFrameDone = nil
+	}
+	s.currentFrame = nil
+	s.frameQueue.releaseAll()
 }
 
 // signalRead performs a non-blocking send on the readChan
