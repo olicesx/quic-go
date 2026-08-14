@@ -218,8 +218,14 @@ func (h *datagramQueue) HandleDatagramFrame(f *wire.DatagramFrame) {
 		}
 	}
 	h.rcvMx.Unlock()
-	if !queued && h.logger.Debug() {
-		h.logger.Debugf("Discarding received DATAGRAM frame (%d bytes payload)", len(f.Data))
+	if !queued {
+		// Receive queue full: return the buffer to the pool instead of
+		// abandoning it for GC. Put's cap check skips non-pooled (oversized)
+		// buffers, so this is safe for both pooled and freshly allocated bufs.
+		datagramBufPool.Put(buf)
+		if h.logger.Debug() {
+			h.logger.Debugf("Discarding received DATAGRAM frame (%d bytes payload)", len(f.Data))
+		}
 	}
 }
 
