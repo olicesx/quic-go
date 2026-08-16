@@ -221,6 +221,11 @@ func (s *receiveStream) readImpl(p []byte) (hasStreamWindowUpdate bool, hasConnW
 			s.currentFrame = nil
 			if s.currentFrameDone != nil {
 				s.currentFrameDone.PutBack()
+				// Clear the releaser: releasePendingFrames (connection
+				// shutdown) must not put this frame back a second time —
+				// the global pool would hand one frame's Data to two
+				// streams concurrently.
+				s.currentFrameDone = nil
 			}
 			s.errorRead = true
 			return hasStreamWindowUpdate, hasConnWindowUpdate, bytesRead, io.EOF

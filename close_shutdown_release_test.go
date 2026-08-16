@@ -2,6 +2,7 @@ package quic
 
 import (
 	"errors"
+	"io"
 	"testing"
 	"time"
 
@@ -71,6 +72,43 @@ func TestReceiveStreamRejectsFrameAfterShutdown(t *testing.T) {
 		&wire.StreamFrame{Data: []byte("late")}, time.Now()))
 	require.False(t, str.frameQueue.HasMoreData(),
 		"frame arriving after shutdown must not be queued")
+}
+
+// Reading to EOF releases the in-flight frame, but must also clear
+// currentFrameDone: a later closeForShutdown (releasePendingFrames, e.g. on
+// connection shutdown while the send half of a bidirectional stream is still
+// open) would otherwise PutBack the same pointer a second time, and the
+// global channel pool would hand one frame's Data buffer to two streams
+// concurrently (data races, cross-stream corruption).
+func TestReceiveStreamEOFThenShutdownSinglePut(t *testing.T) {
+	mockCtrl := gomock.NewController(t)
+	mockFC := mocks.NewMockStreamFlowController(mockCtrl)
+	mockFC.EXPECT().AddBytesRead(gomock.Any()).Return(false, false).AnyTimes()
+	str := newReceiveStream(42, nil, mockFC)
+
+	// Feed one pooled frame carrying the whole stream (FIN implied by
+	// finalOffset) through the real queue path.
+	f := wire.GetStreamFrame()
+	copy(f.Data, "hello")
+	f.Data = f.Data[:5]
+	f.Offset = 0
+	str.mutex.Lock()
+	str.finalOffset = 5
+	require.NoError(t, str.frameQueue.Push(f.Data, 0, f))
+	// Drive the exact readImpl EOF branch (copy loop -> last-frame check).
+	_, _, n, err := str.readImpl(make([]byte, 16))
+	str.mutex.Unlock()
+	require.Equal(t, 5, n)
+	require.ErrorIs(t, err, io.EOF)
+
+	// The EOF path just released the frame back to the global pool, so the
+	// pool length is back to its pre-test level.
+	before := wire.StreamFramePoolLen()
+
+	str.closeForShutdown(errors.New("shut down"))
+
+	require.Equal(t, before, wire.StreamFramePoolLen(),
+		"closeForShutdown after EOF must not put the already-released frame back a second time")
 }
 
 // closeForShutdown must unblock a waiting reader and surface the error; it
