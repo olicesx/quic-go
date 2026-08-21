@@ -83,6 +83,15 @@ type oobConn struct {
 
 var _ rawConn = &oobConn{}
 
+// enableAddrParsing swaps an oobConn's batch reader (if any) to x/net's
+// address-parsing reader, for server-side Listen use. It is a no-op for
+// other rawConn implementations.
+func enableAddrParsing(conn rawConn) {
+	if oc, ok := conn.(*oobConn); ok {
+		oc.useAddrParsing()
+	}
+}
+
 // useAddrParsing swaps the batch reader to one that parses the per-datagram
 // source address (x/net's). It is idempotent and must be called before any
 // server-side packet handling starts (i.e. from Listen).
@@ -148,12 +157,7 @@ func newConn(c OOBCapablePacketConn, supportsDF bool) (*oobConn, error) {
 	if ibc, ok := c.(batchConn); ok {
 		bc = ibc
 	} else {
-		skipAddr, _ = newSkipAddrBatchConn(c)
-		if skipAddr != nil {
-			bc = skipAddr
-		} else {
-			bc = ipv4.NewPacketConn(c)
-		}
+		bc, skipAddr = newBatchConnOrDefault(c)
 	}
 
 	msgs := make([]ipv4.Message, batchSize)

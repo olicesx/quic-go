@@ -418,9 +418,7 @@ func (t *Transport) init(allowZeroLengthConnIDs bool) error {
 		// source address for retry tokens, stateless resets and tracers;
 		// make sure it is parsed. Client (dial-only) use keeps the
 		// allocation-free reader that newConn installed.
-		if oc, ok := conn.(*oobConn); ok {
-			oc.useAddrParsing()
-		}
+		enableAddrParsing(conn)
 		go t.listen(conn)
 		go t.runSendQueue()
 	})

@@ -56,6 +56,22 @@ const (
 	skipAddrBatchSize       = 64
 )
 
+// newBatchConnOrDefault returns the raw recvmmsg reader (no per-datagram
+// source address parsing) for client-side use, or x/net's reader if the
+// raw fd is unavailable.
+func newBatchConnOrDefault(c OOBCapablePacketConn) (bc batchConn, skipAddr *skipAddrBatchConn) {
+	skipAddr, err := newSkipAddrBatchConn(c)
+	if err == nil {
+		return skipAddr, skipAddr
+	}
+	return ipv4.NewPacketConn(c), nil
+}
+
+// msghdrLen adapts an int buffer length to the platform's native
+// msghdr.Controllen / Iovlen field type (uint64 on 64-bit, uint32 on
+// 32-bit). The values always fit in the narrower type.
+func msghdrLen(n int) msghdrLenType { return msghdrLenType(n) }
+
 var _ batchConn = &skipAddrBatchConn{}
 
 // newSkipAddrBatchConn wraps an OOBCapablePacketConn's raw fd.
@@ -84,15 +100,19 @@ func (c *skipAddrBatchConn) ReadBatch(ms []ipv4.Message, _ int) (int, error) {
 			return 0, errors.New("skipAddrBatchConn: message without buffer or OOB space")
 		}
 		name := c.names[i*sizeofSockaddrInet6Skip : (i+1)*sizeofSockaddrInet6Skip : (i+1)*sizeofSockaddrInet6Skip]
-		c.vecs[i] = syscall.Iovec{Base: &ms[i].Buffers[0][0], Len: uint64(len(ms[i].Buffers[0]))}
-		c.hs[i].Hdr = syscall.Msghdr{
-			Name:       (*byte)(unsafe.Pointer(&name[0])),
-			Namelen:    uint32(sizeofSockaddrInet6Skip),
-			Iov:        &c.vecs[i],
-			Iovlen:     1,
-			Control:    &ms[i].OOB[0],
-			Controllen: uint64(len(ms[i].OOB)),
+		c.vecs[i] = syscall.Iovec{Base: &ms[i].Buffers[0][0], Len: msghdrLen(len(ms[i].Buffers[0]))}
+		hdr := syscall.Msghdr{
+			Name:    (*byte)(unsafe.Pointer(&name[0])),
+			Namelen: uint32(sizeofSockaddrInet6Skip),
+			Iov:     &c.vecs[i],
+			Iovlen:  1,
+			Control: &ms[i].OOB[0],
 		}
+		// Controllen / Iovlen field widths differ between 64-bit and
+		// 32-bit platforms; assign through the native field types so the
+		// code compiles on both (the values always fit).
+		hdr.Controllen = msghdrLen(len(ms[i].OOB))
+		c.hs[i].Hdr = hdr
 		c.hs[i].Len = 0
 	}
 	c.n = n

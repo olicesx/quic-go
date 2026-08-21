@@ -522,18 +522,6 @@ func (mr *MockQUICConnMockRecorder) ReceiveDatagram(arg0 any) *MockQUICConnRecei
 	return &MockQUICConnReceiveDatagramCall{Call: call}
 }
 
-// ReleaseDatagram mocks base method.
-func (m *MockQUICConn) ReleaseDatagram(arg0 []byte) {
-	m.ctrl.T.Helper()
-	m.ctrl.Call(m, "ReleaseDatagram", arg0)
-}
-
-// ReleaseDatagram indicates an expected call of ReleaseDatagram.
-func (mr *MockQUICConnMockRecorder) ReleaseDatagram(arg0 any) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ReleaseDatagram", reflect.TypeOf((*MockQUICConn)(nil).ReleaseDatagram), arg0)
-}
-
 // MockQUICConnReceiveDatagramCall wrap *gomock.Call
 type MockQUICConnReceiveDatagramCall struct {
 	*gomock.Call
@@ -553,6 +541,42 @@ func (c *MockQUICConnReceiveDatagramCall) Do(f func(context.Context) ([]byte, er
 
 // DoAndReturn rewrite *gomock.Call.DoAndReturn
 func (c *MockQUICConnReceiveDatagramCall) DoAndReturn(f func(context.Context) ([]byte, error)) *MockQUICConnReceiveDatagramCall {
+	c.Call = c.Call.DoAndReturn(f)
+	return c
+}
+
+// ReleaseDatagram mocks base method.
+func (m *MockQUICConn) ReleaseDatagram(arg0 []byte) {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "ReleaseDatagram", arg0)
+}
+
+// ReleaseDatagram indicates an expected call of ReleaseDatagram.
+func (mr *MockQUICConnMockRecorder) ReleaseDatagram(arg0 any) *MockQUICConnReleaseDatagramCall {
+	mr.mock.ctrl.T.Helper()
+	call := mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ReleaseDatagram", reflect.TypeOf((*MockQUICConn)(nil).ReleaseDatagram), arg0)
+	return &MockQUICConnReleaseDatagramCall{Call: call}
+}
+
+// MockQUICConnReleaseDatagramCall wrap *gomock.Call
+type MockQUICConnReleaseDatagramCall struct {
+	*gomock.Call
+}
+
+// Return rewrite *gomock.Call.Return
+func (c *MockQUICConnReleaseDatagramCall) Return() *MockQUICConnReleaseDatagramCall {
+	c.Call = c.Call.Return()
+	return c
+}
+
+// Do rewrite *gomock.Call.Do
+func (c *MockQUICConnReleaseDatagramCall) Do(f func([]byte)) *MockQUICConnReleaseDatagramCall {
+	c.Call = c.Call.Do(f)
+	return c
+}
+
+// DoAndReturn rewrite *gomock.Call.DoAndReturn
+func (c *MockQUICConnReleaseDatagramCall) DoAndReturn(f func([]byte)) *MockQUICConnReleaseDatagramCall {
 	c.Call = c.Call.DoAndReturn(f)
 	return c
 }

@@ -92,6 +92,17 @@ func TestKeyUpdates(t *testing.T) {
 	require.NoError(t, conn.CloseWithError(0, ""))
 
 	require.NoError(t, <-serverErrChan)
+	// Wait for both connection run loops to finish before returning: the
+	// deferred t.Cleanup restores handshake.KeyUpdateInterval, which the
+	// run loops still read (shouldInitiateKeyUpdate). Racing the restore
+	// against a live connection is a data race.
+	ctxDrain, cancelDrain := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancelDrain()
+	<-conn.Context().Done()
+	select {
+	case <-serverConn.Context().Done():
+	case <-ctxDrain.Done():
+	}
 
 	keyPhasesSent, keyPhasesReceived := countKeyPhases()
 	t.Logf("Used %d key phases on outgoing and %d key phases on incoming packets.", keyPhasesSent, keyPhasesReceived)
