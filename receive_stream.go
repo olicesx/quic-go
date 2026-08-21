@@ -129,7 +129,14 @@ func (s *receiveStream) isNewlyCompleted() bool {
 }
 
 func (s *receiveStream) readImpl(p []byte) (hasStreamWindowUpdate bool, hasConnWindowUpdate bool, _ int, _ error) {
-	if s.currentFrameIsLast && s.currentFrame == nil {
+	// Only surface a natural EOF when no cancellation error is pending.
+	// cancelReadImpl -> releasePendingFrames clears currentFrame but leaves
+	// currentFrameIsLast set, so if the application read part of the stream
+	// and then CancelRead, the stale `currentFrameIsLast && currentFrame ==
+	// nil` would otherwise be mistaken for a natural EOF and swallow the
+	// cancel error. The errorRead flag set by the cancelled path does not
+	// distinguish the two, but a non-nil cancelErr does.
+	if s.cancelErr == nil && s.currentFrameIsLast && s.currentFrame == nil {
 		s.errorRead = true
 		return false, false, 0, io.EOF
 	}
