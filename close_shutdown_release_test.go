@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/olicesx/quic-go/internal/mocks"
+	"github.com/olicesx/quic-go/internal/protocol"
 	"github.com/olicesx/quic-go/internal/wire"
 
 	"github.com/stretchr/testify/require"
@@ -133,4 +134,55 @@ func TestReceiveStreamCloseForShutdownUnblocksReader(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("Read was not unblocked after closeForShutdown")
 	}
+}
+
+func TestReceiveStreamCancelReadReleasesQueuedFrames(t *testing.T) {
+	mockCtrl := gomock.NewController(t)
+	mockFC := mocks.NewMockStreamFlowController(mockCtrl)
+	mockSender := NewMockStreamSender(mockCtrl)
+	str := newReceiveStream(42, mockSender, mockFC)
+
+	cbCur, trCur := getFrameSorterTestCallback(t)
+	cbGap, trGap := getFrameSorterTestCallback(t)
+	require.NoError(t, str.frameQueue.Push([]byte("current"), 0, cbCur))
+	require.NoError(t, str.frameQueue.Push([]byte("gap"), 10, cbGap))
+	str.mutex.Lock()
+	str.dequeueNextFrame()
+	str.mutex.Unlock()
+
+	mockSender.EXPECT().onHasStreamControlFrame(str.StreamID(), gomock.Any())
+	str.CancelRead(1234)
+
+	require.True(t, trCur.WasCalled(), "in-flight current frame must be released on CancelRead")
+	require.True(t, trGap.WasCalled(), "queued gap frame must be released on CancelRead")
+
+	str.CancelRead(4321)
+	n, err := str.Read([]byte{0})
+	require.Zero(t, n)
+	require.ErrorIs(t, err, &StreamError{StreamID: 42, ErrorCode: 1234, Remote: false})
+}
+
+func TestReceiveStreamResetReleasesQueuedFrames(t *testing.T) {
+	mockCtrl := gomock.NewController(t)
+	mockFC := mocks.NewMockStreamFlowController(mockCtrl)
+	mockSender := NewMockStreamSender(mockCtrl)
+	str := newReceiveStream(42, mockSender, mockFC)
+
+	cbCur, trCur := getFrameSorterTestCallback(t)
+	cbGap, trGap := getFrameSorterTestCallback(t)
+	require.NoError(t, str.frameQueue.Push([]byte("current"), 0, cbCur))
+	require.NoError(t, str.frameQueue.Push([]byte("gap"), 10, cbGap))
+	str.mutex.Lock()
+	str.dequeueNextFrame()
+	str.mutex.Unlock()
+
+	mockFC.EXPECT().UpdateHighestReceived(protocol.ByteCount(42), true, gomock.Any())
+	mockFC.EXPECT().Abandon()
+	require.NoError(t, str.handleResetStreamFrame(
+		&wire.ResetStreamFrame{StreamID: 42, ErrorCode: 7, FinalSize: 42},
+		time.Now(),
+	))
+
+	require.True(t, trCur.WasCalled(), "in-flight current frame must be released on RESET_STREAM")
+	require.True(t, trGap.WasCalled(), "queued gap frame must be released on RESET_STREAM")
 }

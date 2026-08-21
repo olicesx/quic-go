@@ -268,6 +268,7 @@ func (s *receiveStream) cancelReadImpl(errorCode qerr.StreamErrorCode) (queuedNe
 		return false
 	}
 	s.cancelledLocally = true
+	s.releasePendingFrames()
 	if s.errorRead || s.cancelledRemotely {
 		return false
 	}
@@ -354,6 +355,7 @@ func (s *receiveStream) handleResetStreamFrameImpl(frame *wire.ResetStreamFrame,
 	}
 	s.cancelledRemotely = true
 	s.cancelErr = &StreamError{StreamID: s.streamID, ErrorCode: frame.ErrorCode, Remote: true}
+	s.releasePendingFrames()
 	s.signalRead()
 	return nil
 }

@@ -1032,3 +1032,53 @@ func TestSendStreamRetransmitDataUntilAcknowledged(t *testing.T) {
 	}
 	require.Equal(t, data, received)
 }
+
+func TestSendStreamCloseForShutdownReturnsQueuedFrames(t *testing.T) {
+	const streamID protocol.StreamID = 7
+	mockCtrl := gomock.NewController(t)
+	mockFC := mocks.NewMockStreamFlowController(mockCtrl)
+	mockSender := NewMockStreamSender(mockCtrl)
+	str := newSendStream(context.Background(), streamID, mockSender, mockFC)
+
+	mockSender.EXPECT().onHasStreamData(streamID, str)
+	_, err := str.Write([]byte("queued-next"))
+	require.NoError(t, err)
+
+	mockFC.EXPECT().SendWindowSize().Return(protocol.MaxByteCount)
+	mockFC.EXPECT().AddBytesSent(protocol.ByteCount(11))
+	outstanding, _, _ := str.popStreamFrame(protocol.MaxByteCount, protocol.Version1)
+	require.NotNil(t, outstanding.Frame)
+
+	lost := wire.GetStreamFrame()
+	lost.StreamID = streamID
+	lost.Data = lost.Data[:4]
+	copy(lost.Data, "lost")
+	str.mutex.Lock()
+	str.retransmissionQueue = append(str.retransmissionQueue, lost)
+	next := wire.GetStreamFrame()
+	next.StreamID = streamID
+	next.Data = next.Data[:4]
+	copy(next.Data, "next")
+	str.nextFrame = next
+	str.mutex.Unlock()
+
+	before := wire.StreamFramePoolLen()
+	str.closeForShutdown(errors.New("gone"))
+	require.Greater(t, wire.StreamFramePoolLen(), before, "queued frames must return to the pool")
+	require.Nil(t, str.nextFrame)
+	require.Empty(t, str.retransmissionQueue)
+	require.Equal(t, int64(1), str.numOutstandingFrames)
+
+	require.NotPanics(t, func() {
+		outstanding.Handler.OnAcked(outstanding.Frame)
+	})
+	require.Equal(t, int64(1), str.numOutstandingFrames, "OnAcked after shutdown must not decrement")
+
+	inFlightLost := wire.GetStreamFrame()
+	inFlightLost.Data = inFlightLost.Data[:1]
+	copy(inFlightLost.Data, "x")
+	require.NotPanics(t, func() {
+		outstanding.Handler.OnLost(inFlightLost)
+	})
+	require.Empty(t, str.retransmissionQueue, "OnLost after shutdown must Put, not requeue")
+}

@@ -85,6 +85,13 @@ func StreamFramePoolLen() int {
 	return len(streamFramePool.ch)
 }
 
+// DatagramFramePoolLen returns the number of DATAGRAM frames currently held
+// in the pool. Exported for tests that assert CloseWithError drains queued
+// frames instead of leaving them for GC.
+func DatagramFramePoolLen() int {
+	return len(datagramFramePool.ch)
+}
+
 func newPooledStreamFrame() *StreamFrame {
 	return &StreamFrame{
 		Data:     make([]byte, 0, protocol.MaxPacketBufferSize),

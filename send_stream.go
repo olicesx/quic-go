@@ -533,8 +533,14 @@ func (s *sendStream) closeForShutdown(err error) {
 	s.mutex.Lock()
 	if s.finalError == nil && !s.finishedWriting {
 		s.finalError = err
-		s.returnFramesToPool()
 	}
+	// Always return queued (not yet outstanding) frames, including after
+	// Close(): a FIN that has not been popped yet still sits in nextFrame.
+	// In-flight frames stay with the ackhandler until OnAcked/OnLost; those
+	// paths PutBack after cancelled/closedForShutdown, so this is not a
+	// double-put. Leave numOutstandingFrames alone: OnAcked/OnLost skip the
+	// counter after shutdown so an ACK cannot panic on a zeroed count.
+	s.returnFramesToPool()
 	s.closedForShutdown = true
 	s.mutex.Unlock()
 	s.signalWrite()
@@ -556,7 +562,7 @@ func (s *sendStreamAckHandler) OnAcked(f wire.Frame) {
 	sf := f.(*wire.StreamFrame)
 	sf.PutBack()
 	s.mutex.Lock()
-	if s.cancelled {
+	if s.cancelled || s.closedForShutdown {
 		s.mutex.Unlock()
 		return
 	}
@@ -575,7 +581,7 @@ func (s *sendStreamAckHandler) OnAcked(f wire.Frame) {
 func (s *sendStreamAckHandler) OnLost(f wire.Frame) {
 	sf := f.(*wire.StreamFrame)
 	s.mutex.Lock()
-	if s.cancelled {
+	if s.cancelled || s.closedForShutdown {
 		// Return the frame to pool since it won't be retransmitted.
 		sf.PutBack()
 		s.mutex.Unlock()

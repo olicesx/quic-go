@@ -134,12 +134,27 @@ func newDatagramQueue(hasData func(), logger utils.Logger) *datagramQueue {
 // Up to maxDatagramSendQueueLen DATAGRAM frames will be queued.
 // Once that limit is reached, Add blocks until the queue size has reduced or
 // datagramSendQueueFullTimeout elapses, whichever comes first. The timeout
-// keeps a stalled transport bounded: without it a sender parked on a full
-// queue waits forever, which would strand shared dispatcher workers.
+// is a wall-clock deadline from the first blocked wait: a trickle of
+// Pop/sent notifications must not reset it, or a chronically full queue
+// would park the sender indefinitely.
 func (h *datagramQueue) Add(f *wire.DatagramFrame) error {
 	h.sendMx.Lock()
 
+	var deadline time.Time
+	var timer *time.Timer
+	defer func() {
+		if timer != nil {
+			timer.Stop()
+		}
+	}()
 	for {
+		select {
+		case <-h.closed:
+			h.sendMx.Unlock()
+			wire.PutDatagramFrame(f)
+			return h.closeErr
+		default:
+		}
 		if h.sendQueue.Len() < maxDatagramSendQueueLen {
 			h.sendQueue.PushBack(f)
 			h.sendMx.Unlock()
@@ -151,16 +166,17 @@ func (h *datagramQueue) Add(f *wire.DatagramFrame) error {
 		default:
 		}
 		h.sendMx.Unlock()
-		timer := time.NewTimer(datagramSendQueueFullTimeout)
+		if deadline.IsZero() {
+			deadline = time.Now().Add(datagramSendQueueFullTimeout)
+			timer = time.NewTimer(time.Until(deadline))
+		}
 		select {
 		case <-h.closed:
 			// Connection closed while blocked on a full queue: the frame
 			// was never sent, return it to the pool.
-			timer.Stop()
 			wire.PutDatagramFrame(f)
 			return h.closeErr
 		case <-h.sent:
-			timer.Stop()
 		case <-timer.C:
 			// Queue stayed full for the whole timeout: the transport is
 			// stalled, not merely backpressured. Drop this datagram and
@@ -219,12 +235,13 @@ func (h *datagramQueue) HandleDatagramFrame(f *wire.DatagramFrame) {
 	}
 	h.rcvMx.Unlock()
 	if !queued {
+		n := len(buf)
 		// Receive queue full: return the buffer to the pool instead of
 		// abandoning it for GC. Put's cap check skips non-pooled (oversized)
 		// buffers, so this is safe for both pooled and freshly allocated bufs.
 		datagramBufPool.Put(buf)
 		if h.logger.Debug() {
-			h.logger.Debugf("Discarding received DATAGRAM frame (%d bytes payload)", len(f.Data))
+			h.logger.Debugf("Discarding received DATAGRAM frame (%d bytes payload)", n)
 		}
 	}
 }
@@ -270,4 +287,18 @@ func (h *datagramQueue) Receive(ctx context.Context) ([]byte, error) {
 func (h *datagramQueue) CloseWithError(e error) {
 	h.closeErr = e
 	close(h.closed)
+	// Drain queued frames/buffers so they return to their pools. Packer
+	// and ReceiveDatagram stop after the connection run loop exits, so
+	// leftover entries would otherwise sit until GC.
+	h.sendMx.Lock()
+	for !h.sendQueue.Empty() {
+		wire.PutDatagramFrame(h.sendQueue.PopFront())
+	}
+	h.sendMx.Unlock()
+	h.rcvMx.Lock()
+	for _, buf := range h.rcvQueue {
+		datagramBufPool.Put(buf)
+	}
+	h.rcvQueue = h.rcvQueue[:0]
+	h.rcvMx.Unlock()
 }

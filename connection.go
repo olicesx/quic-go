@@ -1977,17 +1977,23 @@ func (s *connection) sendPacketsWithGSO(now time.Time) error {
 	ecn := s.sentPacketHandler.ECNMode(true)
 	// segSize is the size of the first packet in this GSO batch. All
 	// subsequent packets of the same size are merged into the batch; a
-	// packet of a different size may follow once, as the batch's last
-	// segment (the kernel splits the payload into segSize chunks, so the
-	// final segment may legitimately be shorter).
+	// shorter packet may follow once, as the batch's last segment (the
+	// kernel splits the payload into segSize chunks, so the final
+	// segment may legitimately be shorter, never longer).
+	//
+	// AppendPacket always uses maxSize and registerPackedShortHeaderPacket
+	// runs immediately, so a later STREAM packet that is larger than the
+	// current DATAGRAM-sized batch cannot be rewritten. If that packet
+	// stayed in the buffer, UDP_SEGMENT would cut it into a full
+	// segSize chunk plus a leftover that the peer would parse as a
+	// second packet. Peel it onto a fresh buffer as the next batch's
+	// first packet instead.
 	//
 	// Upstream only merged full-size packets, which never happens for
 	// DATAGRAM (UDP relay) traffic: a datagram packet is short-header +
 	// DATAGRAM frame and is not padded to maxSize. Merging same-size
 	// packets instead extends GSO to the relay workload (3-5x send
-	// throughput, measured on loopback). GSO requires uniform segments,
-	// so a batch is closed by the first packet whose size differs from
-	// the batch's segment size.
+	// throughput, measured on loopback).
 	var segSize protocol.ByteCount
 	var lastSize protocol.ByteCount
 	var stopMerging bool
@@ -2010,15 +2016,34 @@ func (s *connection) sendPacketsWithGSO(now time.Time) error {
 					return nil
 				}
 				dontSendMore = true
-			} else {
-				if segSize == 0 {
-					segSize = size
-				} else if stopMerging || size != lastSize {
-					// First packet of a different size: it stays in the
-					// buffer as the batch's last segment, and no further
-					// packets are merged into this batch.
-					stopMerging = true
+			} else if segSize == 0 {
+				segSize = size
+				lastSize = size
+			} else if size > segSize {
+				// Too large for this batch's UDP_SEGMENT size. The
+				// packet is already registered, so copy it onto a
+				// fresh buffer and flush the current batch without it.
+				oversize := getLargePacketBuffer()
+				oversize.Data = append(oversize.Data, buf.Data[len(buf.Data)-int(size):]...)
+				buf.Data = buf.Data[:len(buf.Data)-int(size)]
+				s.sendQueue.Send(buf, uint16(segSize), ecn)
+				if s.sendQueue.WouldBlock() {
+					// The peeled packet must still go out: it is already
+					// in the sent-packet handler. Wait for a queue slot
+					// rather than dropping it or panicking on Send.
+					<-s.sendQueue.Available()
 				}
+				buf = oversize
+				segSize = size
+				lastSize = size
+				stopMerging = false
+				ecn = s.sentPacketHandler.ECNMode(true)
+			} else if stopMerging || size != lastSize {
+				// First packet of a different (smaller) size: it
+				// stays in the buffer as the batch's last segment.
+				stopMerging = true
+				lastSize = size
+			} else {
 				lastSize = size
 			}
 

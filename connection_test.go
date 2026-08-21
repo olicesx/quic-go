@@ -2077,6 +2077,82 @@ func TestConnectionGSOBatchPacketSize(t *testing.T) {
 	}
 }
 
+// A later packet larger than the batch's UDP_SEGMENT size (DATAGRAM then
+// STREAM) must be peeled onto a new batch. The kernel never splits a
+// segment longer than segSize; leaving the oversized packet in the buffer
+// would cut it into a full segSize chunk plus a leftover the peer parses
+// as a second packet.
+func TestConnectionGSOBatchPeelsOversizedPacket(t *testing.T) {
+	mockCtrl := gomock.NewController(t)
+	sph := mockackhandler.NewMockSentPacketHandler(mockCtrl)
+	tc := newServerTestConnection(t,
+		mockCtrl,
+		nil,
+		true,
+		connectionOptHandshakeConfirmed(),
+		connectionOptSentPacketHandler(sph),
+	)
+
+	sph.EXPECT().SendMode(gomock.Any()).Return(ackhandler.SendAny).AnyTimes()
+	sph.EXPECT().TimeUntilSend().Return(time.Time{}).AnyTimes()
+	sph.EXPECT().SentPacket(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).AnyTimes()
+	sph.EXPECT().GetLossDetectionTimeout().Return(time.Time{}).AnyTimes()
+	sph.EXPECT().ECNMode(gomock.Any()).Return(protocol.ECT1).AnyTimes()
+
+	maxPacketSize := tc.conn.maxPacketSize()
+	small := bytes.Repeat([]byte{1}, 200)
+	large := bytes.Repeat([]byte{2}, int(maxPacketSize))
+
+	gomock.InOrder(
+		tc.packer.EXPECT().AppendPacket(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(
+			func(buffer *packetBuffer, count protocol.ByteCount, t time.Time, version protocol.Version) (shortHeaderPacket, error) {
+				buffer.Data = append(buffer.Data, small...)
+				return shortHeaderPacket{PacketNumber: 1}, nil
+			},
+		),
+		tc.packer.EXPECT().AppendPacket(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(
+			func(buffer *packetBuffer, count protocol.ByteCount, t time.Time, version protocol.Version) (shortHeaderPacket, error) {
+				buffer.Data = append(buffer.Data, small...)
+				return shortHeaderPacket{PacketNumber: 2}, nil
+			},
+		),
+		tc.packer.EXPECT().AppendPacket(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(
+			func(buffer *packetBuffer, count protocol.ByteCount, t time.Time, version protocol.Version) (shortHeaderPacket, error) {
+				buffer.Data = append(buffer.Data, large...)
+				return shortHeaderPacket{PacketNumber: 3}, nil
+			},
+		),
+		tc.packer.EXPECT().AppendPacket(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(shortHeaderPacket{}, errNothingToPack),
+	)
+
+	firstBatch := append(append([]byte{}, small...), small...)
+	done := make(chan struct{})
+	gomock.InOrder(
+		tc.sendConn.EXPECT().Write(firstBatch, uint16(len(small)), protocol.ECT1),
+		tc.sendConn.EXPECT().Write(large, uint16(len(large)), protocol.ECT1).DoAndReturn(
+			func([]byte, uint16, protocol.ECN) error { close(done); return nil },
+		),
+	)
+
+	errChan := make(chan error, 1)
+	go func() { errChan <- tc.conn.run() }()
+	tc.conn.scheduleSending()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("timeout")
+	}
+
+	tc.connRunner.EXPECT().Remove(gomock.Any()).AnyTimes()
+	tc.conn.destroy(nil)
+	select {
+	case err := <-errChan:
+		require.NoError(t, err)
+	case <-time.After(3 * time.Second):
+		t.Fatal("timeout")
+	}
+}
+
 func TestConnectionGSOBatchECN(t *testing.T) {
 	mockCtrl := gomock.NewController(t)
 	sph := mockackhandler.NewMockSentPacketHandler(mockCtrl)

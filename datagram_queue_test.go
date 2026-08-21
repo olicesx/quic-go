@@ -188,3 +188,78 @@ func TestDatagramQueueAddTimeout(t *testing.T) {
 	queue.Pop()
 	require.NoError(t, queue.Add(&wire.DatagramFrame{Data: []byte("baz")}))
 }
+
+// A trickle of sent notifications must not reset the queue-full deadline.
+// The old timer-in-the-loop waited another full timeout after every Pop
+// signal, so a chronically full queue parked the sender indefinitely.
+func TestDatagramQueueAddTimeoutAbsoluteDeadline(t *testing.T) {
+	queue := newDatagramQueue(func() {}, utils.DefaultLogger)
+
+	for i := 0; i < maxDatagramSendQueueLen; i++ {
+		require.NoError(t, queue.Add(&wire.DatagramFrame{Data: []byte{0}}))
+	}
+
+	old := datagramSendQueueFullTimeout
+	datagramSendQueueFullTimeout = scaleDuration(40 * time.Millisecond)
+	defer func() { datagramSendQueueFullTimeout = old }()
+
+	errChan := make(chan error, 1)
+	go func() { errChan <- queue.Add(&wire.DatagramFrame{Data: []byte("late")}) }()
+
+	stop := make(chan struct{})
+	defer close(stop)
+	go func() {
+		ticker := time.NewTicker(scaleDuration(5 * time.Millisecond))
+		defer ticker.Stop()
+		for {
+			select {
+			case <-stop:
+				return
+			case <-ticker.C:
+				// Pop and refill under the same lock so the blocked Add
+				// cannot sneak into the vacated slot. Then signal sent,
+				// which is what a real Pop would do.
+				queue.sendMx.Lock()
+				if !queue.sendQueue.Empty() {
+					_ = queue.sendQueue.PopFront()
+					queue.sendQueue.PushBack(&wire.DatagramFrame{Data: []byte{1}})
+				}
+				select {
+				case queue.sent <- struct{}{}:
+				default:
+				}
+				queue.sendMx.Unlock()
+			}
+		}
+	}()
+
+	select {
+	case err := <-errChan:
+		require.ErrorIs(t, err, ErrDatagramQueueFullTimeout)
+	case <-time.After(scaleDuration(2 * time.Second)):
+		t.Fatal("expected Add to time out at the original deadline despite periodic sent signals")
+	}
+}
+
+func TestDatagramQueueCloseWithErrorDrainsQueuedFrames(t *testing.T) {
+	queue := newDatagramQueue(func() {}, utils.DefaultLogger)
+
+	f := wire.GetDatagramFrame()
+	f.Data = append(f.Data, "queued"...)
+	require.NoError(t, queue.Add(f))
+	require.NotNil(t, queue.Peek())
+
+	incoming := &wire.DatagramFrame{Data: []byte("recv")}
+	queue.HandleDatagramFrame(incoming)
+
+	queue.CloseWithError(errors.New("closed"))
+
+	require.Nil(t, queue.Peek(), "send queue must be drained on close")
+	_, err := queue.Receive(context.Background())
+	require.EqualError(t, err, "closed", "receive queue must be drained, not handed to Receive")
+
+	before := wire.DatagramFramePoolLen()
+	late := wire.GetDatagramFrame()
+	require.Error(t, queue.Add(late))
+	require.Equal(t, before, wire.DatagramFramePoolLen(), "Add after close must put the unsent frame back")
+}
