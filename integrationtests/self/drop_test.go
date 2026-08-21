@@ -53,7 +53,7 @@ func TestDropTests(t *testing.T) {
 			require.NoError(t, err)
 			defer proxy.Close()
 
-				ctx, cancel := context.WithTimeout(context.Background(), scaleDuration(5*time.Second))
+			ctx, cancel := context.WithTimeout(context.Background(), scaleDuration(5*time.Second))
 			defer cancel()
 			conn, err := quic.Dial(ctx, newUPDConnLocalhost(t), proxy.LocalAddr(), getTLSClientConfig(), getQuicConfig(nil))
 			require.NoError(t, err)

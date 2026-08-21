@@ -6,12 +6,11 @@ import (
 	"crypto/rand"
 	"fmt"
 	"sync"
+	"testing"
+	"time"
 
 	quic "github.com/olicesx/quic-go"
 	"github.com/stretchr/testify/require"
-
-	"testing"
-	"time"
 )
 
 // TestDatagramGSOBurst verifies that a high-volume stream of same-size
@@ -86,5 +85,4 @@ func TestDatagramGSOBurst(t *testing.T) {
 
 	wg.Wait()
 	require.NoError(t, <-recvErr)
-
 }
