@@ -1033,21 +1033,21 @@ func TestSentPacketHandlerECN(t *testing.T) {
 	pns[1] = sendPacket(now, protocol.ECT0)
 	pns[2] = sendPacket(now, protocol.ECT0)
 	pns[3] = sendPacket(now, protocol.ECT0)
-		// Give the RTT sample a real value (~10ms): with a sub-millisecond
-		// RTT the loss threshold collapses to the 1ms timer granularity and
-		// pns[1] (sent a full second after pns[0]) can be spuriously declared
-		// lost on a loaded machine, producing a second congestion event.
-		time.Sleep(10 * time.Millisecond)
+	// Give the RTT sample a real value (~10ms): with a sub-millisecond
+	// RTT the loss threshold collapses to the 1ms timer granularity and
+	// pns[1] (sent a full second after pns[0]) can be spuriously declared
+	// lost on a loaded machine, producing a second congestion event.
+	time.Sleep(10 * time.Millisecond)
 
-		// Receive an ACK with a short RTT, such that the first packet is lost.
-		cong.EXPECT().OnCongestionEvent(gomock.Any(), gomock.Any(), gomock.Any())
-		ecnHandler.EXPECT().LostPacket(pns[0])
-		ecnHandler.EXPECT().HandleNewlyAcked(gomock.Any(), int64(10), int64(11), int64(12)).DoAndReturn(func(packets []*packet, _, _, _ int64) bool {
-			require.Len(t, packets, 2)
-			require.Equal(t, packets[0].PacketNumber, pns[2])
-			require.Equal(t, packets[1].PacketNumber, pns[3])
-			return false
-		})
+	// Receive an ACK with a short RTT, such that the first packet is lost.
+	cong.EXPECT().OnCongestionEvent(gomock.Any(), gomock.Any(), gomock.Any())
+	ecnHandler.EXPECT().LostPacket(pns[0])
+	ecnHandler.EXPECT().HandleNewlyAcked(gomock.Any(), int64(10), int64(11), int64(12)).DoAndReturn(func(packets []*packet, _, _, _ int64) bool {
+		require.Len(t, packets, 2)
+		require.Equal(t, packets[0].PacketNumber, pns[2])
+		require.Equal(t, packets[1].PacketNumber, pns[3])
+		return false
+	})
 	_, err := sph.ReceivedAck(
 		&wire.AckFrame{
 			AckRanges: ackRanges(pns[2], pns[3]),

@@ -91,7 +91,7 @@ func newUDPXmitBench(b *testing.B, segSize, batch int) *udpXmitBench {
 		bench.mmsgs = make([]mmsghdr, batch)
 		bench.iovs = make([]unix.Iovec, batch)
 		for i := 0; i < batch; i++ {
-			bench.iovs[i] = unix.Iovec{Base: &big[i*segSize], Len: uint64(segSize)}
+			bench.iovs[i] = unix.Iovec{Base: &big[i*segSize], Len: msghdrLen(segSize)}
 			bench.mmsgs[i].MsgHdr.Iov = &bench.iovs[i]
 			bench.mmsgs[i].MsgHdr.Iovlen = 1
 		}
