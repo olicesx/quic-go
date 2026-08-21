@@ -414,6 +414,13 @@ func (t *Transport) init(allowZeroLengthConnIDs bool) error {
 		}
 		t.statelessResetter = newStatelessResetter(t.StatelessResetKey)
 
+		// Server-side packet handling (Listen) consumes the per-datagram
+		// source address for retry tokens, stateless resets and tracers;
+		// make sure it is parsed. Client (dial-only) use keeps the
+		// allocation-free reader that newConn installed.
+		if oc, ok := conn.(*oobConn); ok {
+			oc.useAddrParsing()
+		}
 		go t.listen(conn)
 		go t.runSendQueue()
 	})

@@ -67,6 +67,11 @@ func isECNDisabledUsingEnv() bool {
 type oobConn struct {
 	OOBCapablePacketConn
 	batchConn batchConn
+	// skipAddr, when non-nil, is the raw recvmmsg reader whose messages
+	// carry no source address. It starts as the active batchConn for
+	// client (dial-only) use; useAddrParsing switches the batchConn to
+	// x/net's address-parsing reader before the first server-side Listen.
+	skipAddr *skipAddrBatchConn
 
 	readPos uint8
 	// Packets received from the kernel, but not yet returned by ReadPacket().
@@ -77,6 +82,16 @@ type oobConn struct {
 }
 
 var _ rawConn = &oobConn{}
+
+// useAddrParsing swaps the batch reader to one that parses the per-datagram
+// source address (x/net's). It is idempotent and must be called before any
+// server-side packet handling starts (i.e. from Listen).
+func (c *oobConn) useAddrParsing() {
+	if c.skipAddr != nil {
+		c.batchConn = ipv4.NewPacketConn(c.OOBCapablePacketConn)
+		c.skipAddr = nil
+	}
+}
 
 func newConn(c OOBCapablePacketConn, supportsDF bool) (*oobConn, error) {
 	rawConn, err := c.SyscallConn()
@@ -129,10 +144,16 @@ func newConn(c OOBCapablePacketConn, supportsDF bool) (*oobConn, error) {
 	// to make use of the optimisation. Otherwise, ipv4.NewPacketConn would unwrap the file descriptor
 	// via SyscallConn(), and read it that way, which might not be what the caller wants.
 	var bc batchConn
+	var skipAddr *skipAddrBatchConn
 	if ibc, ok := c.(batchConn); ok {
 		bc = ibc
 	} else {
-		bc = ipv4.NewPacketConn(c)
+		skipAddr, _ = newSkipAddrBatchConn(c)
+		if skipAddr != nil {
+			bc = skipAddr
+		} else {
+			bc = ipv4.NewPacketConn(c)
+		}
 	}
 
 	msgs := make([]ipv4.Message, batchSize)
@@ -151,6 +172,7 @@ func newConn(c OOBCapablePacketConn, supportsDF bool) (*oobConn, error) {
 			ECN: isECNEnabled(),
 		},
 	}
+	oobConn.skipAddr = skipAddr
 	for i := 0; i < batchSize; i++ {
 		oobConn.messages[i].OOB = make([]byte, oobBufferSize)
 	}

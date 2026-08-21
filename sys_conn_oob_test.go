@@ -27,6 +27,10 @@ func runSysConnServer(t *testing.T, network string, addr *net.UDPAddr) (*net.UDP
 	oobConn, err := newConn(udpConn, true)
 	require.NoError(t, err)
 	require.True(t, oobConn.capabilities().DF)
+	// This helper asserts remoteAddr on received packets, so opt into the
+	// address-parsing reader (server semantics). The default client-mode
+	// reader leaves Addr nil.
+	oobConn.useAddrParsing()
 
 	packetChan := make(chan receivedPacket, 1)
 	go func() {

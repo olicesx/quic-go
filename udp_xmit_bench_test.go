@@ -138,7 +138,6 @@ func BenchmarkUDPXmit(b *testing.B) {
 	}
 
 	for _, s := range scenarios {
-		s := s
 		b.Run(s.name, func(b *testing.B) {
 			x := newUDPXmitBench(b, s.seg, s.batch)
 			b.ReportAllocs()
