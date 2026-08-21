@@ -56,6 +56,10 @@ const (
 	skipAddrBatchSize       = 64
 )
 
+// msghdrLen adapts an int buffer length to the platform's native
+// msghdr.Controllen / Iovlen field type; see msghdrlen_*.go.
+func msghdrLen(n int) msghdrLenType { return msghdrLenType(n) }
+
 // newBatchConnOrDefault returns the raw recvmmsg reader (no per-datagram
 // source address parsing) for client-side use, or x/net's reader if the
 // raw fd is unavailable.
@@ -66,11 +70,6 @@ func newBatchConnOrDefault(c OOBCapablePacketConn) (bc batchConn, skipAddr *skip
 	}
 	return ipv4.NewPacketConn(c), nil
 }
-
-// msghdrLen adapts an int buffer length to the platform's native
-// msghdr.Controllen / Iovlen field type (uint64 on 64-bit, uint32 on
-// 32-bit). The values always fit in the narrower type.
-func msghdrLen(n int) msghdrLenType { return msghdrLenType(n) }
 
 var _ batchConn = &skipAddrBatchConn{}
 
