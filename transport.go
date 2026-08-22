@@ -151,6 +151,11 @@ type Transport struct {
 	closeErr    error
 	createdConn bool
 	isSingleUse bool // was created for a single server or client, i.e. by calling quic.Listen or quic.Dial
+	// serverMode is set by createServer before init runs. Server-side packet
+	// handling consumes the per-datagram source address, so only server
+	// transports swap the reader to the address-parsing one; client
+	// (dial-only) transports keep the allocation-free skipAddr reader.
+	serverMode bool
 
 	readingNonQUICPackets atomic.Bool
 	nonQUICPackets        chan receivedPacket
@@ -197,6 +202,7 @@ func (t *Transport) createServer(tlsConf *tls.Config, conf *Config, allow0RTT bo
 	if t.server != nil {
 		return nil, errListenerAlreadySet
 	}
+	t.serverMode = true
 	conf = populateConfig(conf)
 	if err := t.init(false); err != nil {
 		return nil, err
@@ -418,7 +424,9 @@ func (t *Transport) init(allowZeroLengthConnIDs bool) error {
 		// source address for retry tokens, stateless resets and tracers;
 		// make sure it is parsed. Client (dial-only) use keeps the
 		// allocation-free reader that newConn installed.
-		enableAddrParsing(conn)
+		if t.serverMode {
+			enableAddrParsing(conn)
+		}
 		go t.listen(conn)
 		go t.runSendQueue()
 	})
