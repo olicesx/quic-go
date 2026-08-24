@@ -283,14 +283,11 @@ func (c *oobConn) WritePacket(b []byte, addr net.Addr, packetInfoOOB []byte, gso
 			// Preserve the historical assertion for unexpected address types.
 			_ = addr.(*net.UDPAddr)
 		}
-		// skipAddrBatchConn leaves receivedPacket.remoteAddr nil. Live
-		// sends still use sconn's cached Dial remote; closedLocalConn
-		// copies are best-effort and must not crash the process when
-		// the per-packet source is missing. Do not guess lastDest or
-		// PacketConn.RemoteAddr(): a Transport can dial many remotes
-		// on one socket, and skipAddr remaining set is not a
-		// single-remote marker.
-		return 0, nil
+		// skipAddrBatchConn can leave receivedPacket.remoteAddr nil.
+		// closedLocalConn normally substitutes its per-connection peer
+		// before enqueueing a best-effort close copy. Reject any remaining
+		// nil destination instead of panicking or reporting a false success.
+		return 0, syscall.EINVAL
 	}
 	if ecn != protocol.ECNUnsupported {
 		if !c.capabilities().ECN {

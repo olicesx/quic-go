@@ -23,7 +23,7 @@ import (
 // local close, closedLocalConn retransmits CONNECTION_CLOSE using
 // receivedPacket.remoteAddr, which is nil here. That handler therefore
 // uses the connection's cached remote (sconn) instead of the nil packet
-// address. oobConn.WritePacket drops a nil dest instead of panicking.
+// address. oobConn.WritePacket rejects a nil dest instead of panicking.
 // parseFn can only be suppressed inside x/net, so the only way to skip it is
 // to own the mmsghdr plumbing: the layout mirrors x/net's internal/socket
 // (mmsghdr = msghdr + u32 len, padded to 64B on amd64), and only N / NN /

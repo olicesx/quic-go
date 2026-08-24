@@ -61,14 +61,16 @@ func TestClosedLocalConnRetransmitWithSkippedSourceAddr(t *testing.T) {
 	require.Equal(t, remote, packetConn.writtenTo)
 }
 
-func TestWritePacketDropsNilAddrWithoutGuessing(t *testing.T) {
+func TestWritePacketRejectsNilAddrWithoutGuessing(t *testing.T) {
 	packetConn := &fixedRemoteOOBPacketConn{}
 	raw := &oobConn{OOBCapablePacketConn: packetConn, skipAddr: &skipAddrBatchConn{}}
-	require.NotPanics(t, func() {
-		n, err := raw.WritePacket([]byte("close"), nil, nil, 0, protocol.ECNUnsupported)
-		require.NoError(t, err)
-		require.Zero(t, n)
-	})
+	for _, addr := range []net.Addr{nil, (*net.UDPAddr)(nil)} {
+		require.NotPanics(t, func() {
+			n, err := raw.WritePacket([]byte("close"), addr, nil, 0, protocol.ECNUnsupported)
+			require.ErrorIs(t, err, syscall.EINVAL)
+			require.Zero(t, n)
+		})
+	}
 	require.Nil(t, packetConn.writtenTo)
 }
 
