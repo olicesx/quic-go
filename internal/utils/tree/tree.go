@@ -36,7 +36,7 @@ type Val[T any] interface {
 	Match(cond T) int8 // returns 1 if > cond, -1 if < cond, 0 if matches cond
 }
 
-const maxNodePoolSize = 2048
+const maxNodePoolSize = 512
 
 // Btree represents an AVL tree
 type Btree[T Val[T]] struct {
