@@ -154,7 +154,7 @@ func (h *packetHandlerMap) Retire(id protocol.ConnectionID) {
 // Depending on which side closed the connection, we need to:
 // * remote close: absorb delayed packets
 // * local close: retransmit the CONNECTION_CLOSE packet, in case it was lost
-func (h *packetHandlerMap) ReplaceWithClosed(ids []protocol.ConnectionID, connClosePacket []byte) {
+func (h *packetHandlerMap) ReplaceWithClosed(ids []protocol.ConnectionID, connClosePacket []byte, fallbackAddr net.Addr) {
 	var handler packetHandler
 	if connClosePacket != nil {
 		handler = newClosedLocalConn(
@@ -162,6 +162,7 @@ func (h *packetHandlerMap) ReplaceWithClosed(ids []protocol.ConnectionID, connCl
 				h.enqueueClosePacket(closePacket{payload: connClosePacket, addr: addr, info: info})
 			},
 			h.logger,
+			fallbackAddr,
 		)
 	} else {
 		handler = newClosedRemoteConn()

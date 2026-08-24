@@ -15,16 +15,23 @@ type closedLocalConn struct {
 	counter atomic.Uint32
 	logger  utils.Logger
 
-	sendPacket func(net.Addr, packetInfo)
+	fallbackAddr net.Addr
+	sendPacket   func(net.Addr, packetInfo)
 }
 
 var _ packetHandler = &closedLocalConn{}
 
 // newClosedLocalConn creates a new closedLocalConn and runs it.
-func newClosedLocalConn(sendPacket func(net.Addr, packetInfo), logger utils.Logger) packetHandler {
+// fallbackAddr is this connection's last known remote (sconn's cached
+// peer). skipAddrBatchConn leaves per-packet source addresses nil, so
+// close-queue retransmits use this instead of guessing a socket-wide
+// dest. A nil packet addr on a server socket is also safe to send to
+// this peer: it is the connection that closed, not PacketConn.RemoteAddr().
+func newClosedLocalConn(sendPacket func(net.Addr, packetInfo), logger utils.Logger, fallbackAddr net.Addr) packetHandler {
 	return &closedLocalConn{
-		sendPacket: sendPacket,
-		logger:     logger,
+		sendPacket:   sendPacket,
+		logger:       logger,
+		fallbackAddr: fallbackAddr,
 	}
 }
 
@@ -36,7 +43,14 @@ func (c *closedLocalConn) handlePacket(p receivedPacket) {
 		return
 	}
 	c.logger.Debugf("Received %d packets after sending CONNECTION_CLOSE. Retransmitting.", n)
-	c.sendPacket(p.remoteAddr, p.info)
+	addr := p.remoteAddr
+	if addr == nil {
+		addr = c.fallbackAddr
+	}
+	if addr == nil {
+		return
+	}
+	c.sendPacket(addr, p.info)
 }
 
 func (c *closedLocalConn) destroy(error)                              {}

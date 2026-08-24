@@ -2,6 +2,7 @@ package quic
 
 import (
 	"fmt"
+	"net"
 
 	"github.com/olicesx/quic-go/internal/protocol"
 	"github.com/olicesx/quic-go/internal/qerr"
@@ -19,7 +20,7 @@ type connIDGenerator struct {
 	statelessResetter  *statelessResetter
 	removeConnectionID func(protocol.ConnectionID)
 	retireConnectionID func(protocol.ConnectionID)
-	replaceWithClosed  func([]protocol.ConnectionID, []byte)
+	replaceWithClosed  func([]protocol.ConnectionID, []byte, net.Addr)
 	queueControlFrame  func(wire.Frame)
 }
 
@@ -30,7 +31,7 @@ func newConnIDGenerator(
 	statelessResetter *statelessResetter,
 	removeConnectionID func(protocol.ConnectionID),
 	retireConnectionID func(protocol.ConnectionID),
-	replaceWithClosed func([]protocol.ConnectionID, []byte),
+	replaceWithClosed func([]protocol.ConnectionID, []byte, net.Addr),
 	queueControlFrame func(wire.Frame),
 	generator ConnectionIDGenerator,
 ) *connIDGenerator {
@@ -126,7 +127,7 @@ func (m *connIDGenerator) RemoveAll() {
 	}
 }
 
-func (m *connIDGenerator) ReplaceWithClosed(connClose []byte) {
+func (m *connIDGenerator) ReplaceWithClosed(connClose []byte, fallbackAddr net.Addr) {
 	connIDs := make([]protocol.ConnectionID, 0, len(m.activeSrcConnIDs)+1)
 	if m.initialClientDestConnID != nil {
 		connIDs = append(connIDs, *m.initialClientDestConnID)
@@ -134,5 +135,5 @@ func (m *connIDGenerator) ReplaceWithClosed(connClose []byte) {
 	for _, connID := range m.activeSrcConnIDs {
 		connIDs = append(connIDs, connID)
 	}
-	m.replaceWithClosed(connIDs, connClose)
+	m.replaceWithClosed(connIDs, connClose, fallbackAddr)
 }

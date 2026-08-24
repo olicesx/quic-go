@@ -88,7 +88,7 @@ type connRunner interface {
 	Add(protocol.ConnectionID, packetHandler) bool
 	Retire(protocol.ConnectionID)
 	Remove(protocol.ConnectionID)
-	ReplaceWithClosed([]protocol.ConnectionID, []byte)
+	ReplaceWithClosed([]protocol.ConnectionID, []byte, net.Addr)
 	AddResetToken(protocol.StatelessResetToken, packetHandler)
 	RemoveResetToken(protocol.StatelessResetToken)
 }
@@ -1695,7 +1695,7 @@ func (s *connection) handleCloseError(closeErr *closeError) {
 
 	// If this is a remote close we're done here
 	if closeErr.remote {
-		s.connIDGenerator.ReplaceWithClosed(nil)
+		s.connIDGenerator.ReplaceWithClosed(nil, nil)
 		return
 	}
 	if closeErr.immediate {
@@ -1712,7 +1712,7 @@ func (s *connection) handleCloseError(closeErr *closeError) {
 	if err != nil {
 		s.logger.Debugf("Error sending CONNECTION_CLOSE: %s", err)
 	}
-	s.connIDGenerator.ReplaceWithClosed(connClosePacket)
+	s.connIDGenerator.ReplaceWithClosed(connClosePacket, s.conn.RemoteAddr())
 }
 
 func (s *connection) dropEncryptionLevel(encLevel protocol.EncryptionLevel, now time.Time) error {

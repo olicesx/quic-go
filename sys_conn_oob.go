@@ -277,19 +277,32 @@ func (c *oobConn) WritePacket(b []byte, addr net.Addr, packetInfoOOB []byte, gso
 			oob = appendUDPSegmentSizeMsg(oob, gsoSize)
 		}
 	}
+	udpAddr, ok := addr.(*net.UDPAddr)
+	if !ok || udpAddr == nil {
+		if addr != nil {
+			// Preserve the historical assertion for unexpected address types.
+			_ = addr.(*net.UDPAddr)
+		}
+		// skipAddrBatchConn leaves receivedPacket.remoteAddr nil. Live
+		// sends still use sconn's cached Dial remote; closedLocalConn
+		// copies are best-effort and must not crash the process when
+		// the per-packet source is missing. Do not guess lastDest or
+		// PacketConn.RemoteAddr(): a Transport can dial many remotes
+		// on one socket, and skipAddr remaining set is not a
+		// single-remote marker.
+		return 0, nil
+	}
 	if ecn != protocol.ECNUnsupported {
 		if !c.capabilities().ECN {
 			panic("tried to send an ECN-marked packet although ECN is disabled")
 		}
-		if remoteUDPAddr, ok := addr.(*net.UDPAddr); ok {
-			if remoteUDPAddr.IP.To4() != nil {
-				oob = appendIPv4ECNMsg(oob, ecn)
-			} else {
-				oob = appendIPv6ECNMsg(oob, ecn)
-			}
+		if udpAddr.IP.To4() != nil {
+			oob = appendIPv4ECNMsg(oob, ecn)
+		} else {
+			oob = appendIPv6ECNMsg(oob, ecn)
 		}
 	}
-	n, _, err := c.OOBCapablePacketConn.WriteMsgUDP(b, oob, addr.(*net.UDPAddr))
+	n, _, err := c.OOBCapablePacketConn.WriteMsgUDP(b, oob, udpAddr)
 	return n, err
 }
 

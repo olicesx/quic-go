@@ -100,7 +100,7 @@ func TestPacketHandlerMapReplaceWithLocalClosed(t *testing.T) {
 	handler := &mockPacketHandler{}
 	connID := protocol.ParseConnectionID([]byte{4, 3, 2, 1})
 	require.True(t, m.Add(connID, handler))
-	m.ReplaceWithClosed([]protocol.ConnectionID{connID}, []byte("foobar"))
+	m.ReplaceWithClosed([]protocol.ConnectionID{connID}, []byte("foobar"), nil)
 	h, ok := m.Get(connID)
 	require.True(t, ok)
 	require.NotEqual(t, handler, h)
@@ -117,6 +117,53 @@ func TestPacketHandlerMapReplaceWithLocalClosed(t *testing.T) {
 	}, time.Second, 10*time.Millisecond)
 }
 
+func TestPacketHandlerMapReplaceWithLocalClosedUsesFallbackAddr(t *testing.T) {
+	var closePackets []closePacket
+	m := newPacketHandlerMap(
+		func(p closePacket) { closePackets = append(closePackets, p) },
+		utils.DefaultLogger,
+	)
+	connID := protocol.ParseConnectionID([]byte{4, 3, 2, 1})
+	require.True(t, m.Add(connID, &mockPacketHandler{}))
+	fallback := &net.UDPAddr{IP: net.IPv4(9, 9, 9, 9), Port: 443}
+	m.ReplaceWithClosed([]protocol.ConnectionID{connID}, []byte("foobar"), fallback)
+	h, ok := m.Get(connID)
+	require.True(t, ok)
+	h.handlePacket(receivedPacket{remoteAddr: nil})
+	require.Len(t, closePackets, 1)
+	require.Equal(t, fallback, closePackets[0].addr)
+	require.Equal(t, []byte("foobar"), closePackets[0].payload)
+}
+
+func TestPacketHandlerMapClosedConnsKeepSeparateFallbackAddrs(t *testing.T) {
+	var closePackets []closePacket
+	m := newPacketHandlerMap(
+		func(p closePacket) { closePackets = append(closePackets, p) },
+		utils.DefaultLogger,
+	)
+	idA := protocol.ParseConnectionID([]byte{1, 1, 1, 1})
+	idB := protocol.ParseConnectionID([]byte{2, 2, 2, 2})
+	require.True(t, m.Add(idA, &mockPacketHandler{}))
+	require.True(t, m.Add(idB, &mockPacketHandler{}))
+	peerA := &net.UDPAddr{IP: net.IPv4(192, 0, 2, 10), Port: 443}
+	peerB := &net.UDPAddr{IP: net.IPv4(198, 51, 100, 20), Port: 443}
+	m.ReplaceWithClosed([]protocol.ConnectionID{idA}, []byte("close-a"), peerA)
+	m.ReplaceWithClosed([]protocol.ConnectionID{idB}, []byte("close-b"), peerB)
+
+	hA, ok := m.Get(idA)
+	require.True(t, ok)
+	hB, ok := m.Get(idB)
+	require.True(t, ok)
+	hA.handlePacket(receivedPacket{remoteAddr: nil})
+	hB.handlePacket(receivedPacket{remoteAddr: nil})
+
+	require.Len(t, closePackets, 2)
+	require.Equal(t, peerA, closePackets[0].addr)
+	require.Equal(t, []byte("close-a"), closePackets[0].payload)
+	require.Equal(t, peerB, closePackets[1].addr)
+	require.Equal(t, []byte("close-b"), closePackets[1].payload)
+}
+
 func TestPacketHandlerMapReplaceWithRemoteClosed(t *testing.T) {
 	var closePackets []closePacket
 	m := newPacketHandlerMap(
@@ -129,7 +176,7 @@ func TestPacketHandlerMapReplaceWithRemoteClosed(t *testing.T) {
 	handler := &mockPacketHandler{}
 	connID := protocol.ParseConnectionID([]byte{4, 3, 2, 1})
 	require.True(t, m.Add(connID, handler))
-	m.ReplaceWithClosed([]protocol.ConnectionID{connID}, nil)
+	m.ReplaceWithClosed([]protocol.ConnectionID{connID}, nil, nil)
 	h, ok := m.Get(connID)
 	require.True(t, ok)
 	require.NotEqual(t, handler, h)

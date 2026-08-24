@@ -17,13 +17,18 @@ import (
 // x/net's ipv4.PacketConn.ReadBatch unconditionally installs
 // parseFn=parseInetAddr, which allocates a net.IP (16B) plus a *net.UDPAddr
 // for every received datagram. In a client deployment the parsed address is
-// never consumed (the transport dispatches by connection ID; the sendConn
-// caches the dial-time remote), so those two allocations per packet are pure
-// churn. parseFn can only be suppressed inside x/net, so the only way to
-// skip it is to own the mmsghdr plumbing: the layout mirrors x/net's
-// internal/socket (mmsghdr = msghdr + u32 len, padded to 64B on amd64), and
-// only N / NN / Flags are unpacked. Addr stays nil; ECN/PKTINFO control data
-// still flows through the OOB buffer and is parsed by oobConn.ReadPacket.
+// not needed on the receive hot path (the transport dispatches by connection
+// ID; the sendConn caches the dial-time remote), so those two allocations
+// per packet are pure churn. The close-queue path is the exception: after a
+// local close, closedLocalConn retransmits CONNECTION_CLOSE using
+// receivedPacket.remoteAddr, which is nil here. That handler therefore
+// uses the connection's cached remote (sconn) instead of the nil packet
+// address. oobConn.WritePacket drops a nil dest instead of panicking.
+// parseFn can only be suppressed inside x/net, so the only way to skip it is
+// to own the mmsghdr plumbing: the layout mirrors x/net's internal/socket
+// (mmsghdr = msghdr + u32 len, padded to 64B on amd64), and only N / NN /
+// Flags are unpacked. Addr stays nil; ECN/PKTINFO control data still flows
+// through the OOB buffer and is parsed by oobConn.ReadPacket.
 //
 // English: raw recvmmsg batch reader that skips per-packet source-address
 // allocation for client (single-remote) listeners.

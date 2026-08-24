@@ -2,6 +2,7 @@ package quic
 
 import (
 	"fmt"
+	"net"
 
 	"github.com/olicesx/quic-go/internal/protocol"
 	"github.com/olicesx/quic-go/internal/qerr"
@@ -38,7 +39,9 @@ var _ = Describe("Connection ID Generator", func() {
 			statelessResetter,
 			func(c protocol.ConnectionID) { removedConnIDs = append(removedConnIDs, c) },
 			func(c protocol.ConnectionID) { retiredConnIDs = append(retiredConnIDs, c) },
-			func(cs []protocol.ConnectionID, _ []byte) { replacedWithClosed = append(replacedWithClosed, cs...) },
+			func(cs []protocol.ConnectionID, _ []byte, _ net.Addr) {
+				replacedWithClosed = append(replacedWithClosed, cs...)
+			},
 			func(f wire.Frame) { queuedFrames = append(queuedFrames, f) },
 			&protocol.DefaultConnectionIDGenerator{ConnLen: initialConnID.Len()},
 		)
@@ -172,7 +175,7 @@ var _ = Describe("Connection ID Generator", func() {
 	It("replaces with a closed connection for all connection IDs", func() {
 		Expect(g.SetMaxActiveConnIDs(5)).To(Succeed())
 		Expect(queuedFrames).To(HaveLen(4))
-		g.ReplaceWithClosed([]byte("foobar"))
+		g.ReplaceWithClosed([]byte("foobar"), nil)
 		Expect(replacedWithClosed).To(HaveLen(6)) // initial conn ID, initial client dest conn id, and newly issued ones
 		Expect(replacedWithClosed).To(ContainElement(initialClientDestConnID))
 		Expect(replacedWithClosed).To(ContainElement(initialConnID))
