@@ -6,6 +6,7 @@ import (
 	"crypto/tls"
 	"errors"
 	"net"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -22,11 +23,16 @@ import (
 )
 
 type mockPacketConn struct {
-	localAddr net.Addr
-	readErrs  chan error
+	localAddr       net.Addr
+	readErrs        chan error
+	readStarted     chan struct{}
+	readStartedOnce sync.Once
 }
 
 func (c *mockPacketConn) ReadFrom(p []byte) (n int, addr net.Addr, err error) {
+	if c.readStarted != nil {
+		c.readStartedOnce.Do(func() { close(c.readStarted) })
+	}
 	err, ok := <-c.readErrs
 	if !ok {
 		return 0, nil, net.ErrClosed
@@ -117,6 +123,48 @@ func TestTransportPacketHandling(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("timeout")
 	}
+}
+
+func TestTransportRejectsDisabledAddressParsingForServer(t *testing.T) {
+	for _, early := range []bool{false, true} {
+		for _, initialized := range []bool{false, true} {
+			name := "Listen"
+			if early {
+				name = "ListenEarly"
+			}
+			if initialized {
+				name += "AfterInit"
+			}
+			t.Run(name, func(t *testing.T) {
+				tr := &Transport{Conn: newUPDConnLocalhost(t), DisableAddrParsing: true}
+				if initialized {
+					_, err := tr.WriteTo([]byte{0}, tr.Conn.LocalAddr())
+					require.NoError(t, err)
+				}
+				if early {
+					_, err := tr.ListenEarly(&tls.Config{}, nil)
+					require.ErrorContains(t, err, "address parsing cannot be disabled for server transports")
+				} else {
+					_, err := tr.Listen(&tls.Config{}, nil)
+					require.ErrorContains(t, err, "address parsing cannot be disabled for server transports")
+				}
+				if initialized {
+					require.NoError(t, tr.Close())
+				} else {
+					require.NoError(t, tr.Conn.Close())
+				}
+			})
+		}
+	}
+}
+
+func TestPackageDialTransportCannotBecomeServer(t *testing.T) {
+	conn := newUPDConnLocalhost(t)
+	tr, err := setupTransport(conn, &tls.Config{}, false)
+	require.NoError(t, err)
+	_, err = tr.Listen(&tls.Config{}, nil)
+	require.ErrorContains(t, err, "address parsing cannot be disabled for server transports")
+	require.NoError(t, conn.Close())
 }
 
 func TestTransportAndListenerConcurrentClose(t *testing.T) {
@@ -376,6 +424,82 @@ func TestTransportListening(t *testing.T) {
 	ln, err = tr.Listen(&tls.Config{}, nil)
 	require.NoError(t, err)
 	defer ln.Close()
+}
+
+func TestTransportNonQUICPacketBufferLifecycle(t *testing.T) {
+	newPacket := func(data []byte) receivedPacket {
+		buffer := &packetBuffer{
+			Data:     make([]byte, len(data), protocol.MaxPacketBufferSize),
+			refCount: 1,
+		}
+		copy(buffer.Data, data)
+		return receivedPacket{buffer: buffer, data: buffer.Data}
+	}
+
+	t.Run("drop before reader", func(t *testing.T) {
+		tr := &Transport{}
+		packet := newPacket([]byte{0})
+		tr.handleNonQUICPacket(packet)
+		require.Zero(t, packet.buffer.refCount)
+	})
+
+	t.Run("drop when queue is full", func(t *testing.T) {
+		tr := &Transport{nonQUICPackets: make(chan receivedPacket, 1)}
+		tr.readingNonQUICPackets.Store(true)
+		queued := newPacket([]byte{0})
+		dropped := newPacket([]byte{0})
+		tr.handleNonQUICPacket(queued)
+		tr.handleNonQUICPacket(dropped)
+		require.Equal(t, 1, queued.buffer.refCount)
+		require.Zero(t, dropped.buffer.refCount)
+		tr.releaseQueuedNonQUICPackets()
+		require.Zero(t, queued.buffer.refCount)
+	})
+
+	t.Run("release after read", func(t *testing.T) {
+		conn := &mockPacketConn{
+			localAddr:   &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)},
+			readErrs:    make(chan error),
+			readStarted: make(chan struct{}),
+		}
+		tr := &Transport{Conn: conn, createdConn: true}
+		require.NoError(t, tr.init(false))
+		defer tr.Close()
+		<-conn.readStarted
+		tr.nonQUICPacketsOnce.Do(func() {
+			tr.nonQUICPackets = make(chan receivedPacket, maxQueuedNonQUICPackets)
+			tr.readingNonQUICPackets.Store(true)
+		})
+		packet := newPacket([]byte{0, 1, 2, 3})
+		tr.nonQUICPackets <- packet
+		buf := make([]byte, 4)
+		n, _, err := tr.ReadNonQUICPacket(context.Background(), buf)
+		require.NoError(t, err)
+		require.Equal(t, 4, n)
+		require.Equal(t, []byte{0, 1, 2, 3}, buf)
+		require.Zero(t, packet.buffer.refCount)
+	})
+}
+
+func TestTransportConcurrentFirstReadNonQUICPacket(t *testing.T) {
+	tr := &Transport{Conn: newUPDConnLocalhost(t)}
+	defer tr.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), scaleDuration(20*time.Millisecond))
+	defer cancel()
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	for range 16 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			_, _, err := tr.ReadNonQUICPacket(ctx, make([]byte, 16))
+			require.ErrorIs(t, err, context.DeadlineExceeded)
+		}()
+	}
+	close(start)
+	wg.Wait()
 }
 
 func TestTransportNonQUICPackets(t *testing.T) {

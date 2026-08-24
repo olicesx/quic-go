@@ -62,6 +62,14 @@ type Transport struct {
 	// After passing the connection to the Transport, it's invalid to call ReadFrom or WriteTo on the connection.
 	Conn net.PacketConn
 
+	// DisableAddrParsing disables parsing the remote address of received datagrams
+	// on supported platforms. This avoids two allocations per datagram, but causes
+	// ReadNonQUICPacket and packet-level tracing to receive a nil remote address.
+	// It is intended for dial-only transports that don't consume those addresses.
+	// Listen and ListenEarly return an error when this option is set.
+	// It must not be changed after the Transport is first used.
+	DisableAddrParsing bool
+
 	// The length of the connection ID in bytes.
 	// It can be any value between 1 and 20.
 	// Due to the increased risk of collisions, it is not recommended to use connection IDs shorter than 4 bytes.
@@ -147,16 +155,13 @@ type Transport struct {
 	closeQueue          chan closePacket
 	statelessResetQueue chan receivedPacket
 
-	listening   chan struct{} // is closed when listen returns
-	closeErr    error
-	createdConn bool
-	isSingleUse bool // was created for a single server or client, i.e. by calling quic.Listen or quic.Dial
-	// serverMode is set by createServer before init runs. Server-side packet
-	// handling consumes the per-datagram source address, so only server
-	// transports swap the reader to the address-parsing one; client
-	// (dial-only) transports keep the allocation-free skipAddr reader.
-	serverMode bool
+	listening       chan struct{} // is closed when listen returns
+	closeErr        error
+	createdConn     bool
+	isSingleUse     bool // was created for a single server or client, i.e. by calling quic.Listen or quic.Dial
+	skipAddrParsing bool // package-level Dial helpers don't consume per-datagram source addresses
 
+	nonQUICPacketsOnce    sync.Once
 	readingNonQUICPackets atomic.Bool
 	nonQUICPackets        chan receivedPacket
 
@@ -192,6 +197,9 @@ func (t *Transport) createServer(tlsConf *tls.Config, conf *Config, allow0RTT bo
 	if err := validateConfig(conf); err != nil {
 		return nil, err
 	}
+	if t.DisableAddrParsing || t.skipAddrParsing {
+		return nil, errors.New("quic: address parsing cannot be disabled for server transports")
+	}
 
 	t.mutex.Lock()
 	defer t.mutex.Unlock()
@@ -202,7 +210,6 @@ func (t *Transport) createServer(tlsConf *tls.Config, conf *Config, allow0RTT bo
 	if t.server != nil {
 		return nil, errListenerAlreadySet
 	}
-	t.serverMode = true
 	conf = populateConfig(conf)
 	if err := t.init(false); err != nil {
 		return nil, err
@@ -420,11 +427,10 @@ func (t *Transport) init(allowZeroLengthConnIDs bool) error {
 		}
 		t.statelessResetter = newStatelessResetter(t.StatelessResetKey)
 
-		// Server-side packet handling (Listen) consumes the per-datagram
-		// source address for retry tokens, stateless resets and tracers;
-		// make sure it is parsed. Client (dial-only) use keeps the
-		// allocation-free reader that newConn installed.
-		if t.serverMode {
+		// Explicit transports preserve net.PacketConn address semantics by default.
+		// Package-level Dial helpers and explicit dial-only opt-outs keep the
+		// allocation-free reader.
+		if !t.skipAddrParsing && !t.DisableAddrParsing {
 			enableAddrParsing(conn)
 		}
 		go t.listen(conn)
@@ -524,7 +530,10 @@ func (t *Transport) close(e error) {
 }
 
 func (t *Transport) listen(conn rawConn) {
-	defer close(t.listening)
+	defer func() {
+		close(t.listening)
+		t.releaseQueuedNonQUICPackets()
+	}()
 
 	for {
 		p, err := conn.ReadPacket()
@@ -671,6 +680,7 @@ func (t *Transport) handleNonQUICPacket(p receivedPacket) {
 	// Strictly speaking, this is racy,
 	// but we only care about receiving packets at some point after ReadNonQUICPacket has been called.
 	if !t.readingNonQUICPackets.Load() {
+		p.buffer.Release()
 		return
 	}
 	select {
@@ -679,27 +689,44 @@ func (t *Transport) handleNonQUICPacket(p receivedPacket) {
 		if t.Tracer != nil && t.Tracer.DroppedPacket != nil {
 			t.Tracer.DroppedPacket(p.remoteAddr, logging.PacketTypeNotDetermined, p.Size(), logging.PacketDropDOSPrevention)
 		}
+		p.buffer.Release()
+	}
+}
+
+func (t *Transport) releaseQueuedNonQUICPackets() {
+	if !t.readingNonQUICPackets.Load() {
+		return
+	}
+	for {
+		select {
+		case p := <-t.nonQUICPackets:
+			p.buffer.Release()
+		default:
+			return
+		}
 	}
 }
 
 const maxQueuedNonQUICPackets = 32
 
 // ReadNonQUICPacket reads non-QUIC packets received on the underlying connection.
+// The returned address is nil when DisableAddrParsing is enabled.
 // The detection logic is very simple: Any packet that has the first and second bit of the packet set to 0.
 // Note that this is stricter than the detection logic defined in RFC 9443.
 func (t *Transport) ReadNonQUICPacket(ctx context.Context, b []byte) (int, net.Addr, error) {
 	if err := t.init(false); err != nil {
 		return 0, nil, err
 	}
-	if !t.readingNonQUICPackets.Load() {
+	t.nonQUICPacketsOnce.Do(func() {
 		t.nonQUICPackets = make(chan receivedPacket, maxQueuedNonQUICPackets)
 		t.readingNonQUICPackets.Store(true)
-	}
+	})
 	select {
 	case <-ctx.Done():
 		return 0, nil, ctx.Err()
 	case p := <-t.nonQUICPackets:
 		n := copy(b, p.data)
+		p.buffer.Release()
 		return n, p.remoteAddr, nil
 	case <-t.listening:
 		return 0, nil, errors.New("closed")

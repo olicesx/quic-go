@@ -3,12 +3,145 @@
 package quic
 
 import (
+	"context"
+	"crypto/tls"
 	"net"
 	"syscall"
 	"testing"
+	"time"
 
 	"golang.org/x/net/ipv4"
 )
+
+// TestTransportAddrParsingModes verifies the receive reader selected for each
+// supported client transport mode.
+func TestTransportAddrParsingModes(t *testing.T) {
+	tests := []struct {
+		name         string
+		configure    func(*Transport)
+		wantSkipAddr bool
+	}{
+		{name: "explicit transport defaults to parsing"},
+		{
+			name: "explicit transport can opt out",
+			configure: func(tr *Transport) {
+				tr.DisableAddrParsing = true
+			},
+			wantSkipAddr: true,
+		},
+		{
+			name: "package dial helper stays allocation-free",
+			configure: func(tr *Transport) {
+				tr.isSingleUse = true
+				tr.skipAddrParsing = true
+			},
+			wantSkipAddr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			conn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+			if err != nil {
+				t.Skipf("no loopback UDP: %v", err)
+			}
+			tr := &Transport{Conn: conn}
+			if tt.configure != nil {
+				tt.configure(tr)
+			}
+			if err := tr.init(tr.isSingleUse); err != nil {
+				t.Fatalf("init transport: %v", err)
+			}
+			oob, ok := tr.conn.(*oobConn)
+			if !ok {
+				t.Fatalf("wrapped connection has type %T, want *oobConn", tr.conn)
+			}
+			if got := oob.skipAddr != nil; got != tt.wantSkipAddr {
+				t.Fatalf("skipAddr enabled = %t, want %t", got, tt.wantSkipAddr)
+			}
+			if err := tr.Close(); err != nil {
+				t.Fatalf("close transport: %v", err)
+			}
+		})
+	}
+}
+
+// TestExplicitTransportDisableAddrParsingReturnsNilSource verifies the public
+// opt-out preserves payload delivery while deliberately omitting the sender.
+func TestExplicitTransportDisableAddrParsingReturnsNilSource(t *testing.T) {
+	recvConn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		t.Skipf("no loopback UDP: %v", err)
+	}
+	tr := &Transport{Conn: recvConn, DisableAddrParsing: true}
+	defer func() { _ = tr.Close() }()
+
+	type result struct {
+		n    int
+		addr net.Addr
+		err  error
+		data [4]byte
+	}
+	resultCh := make(chan result, 1)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	go func() {
+		var r result
+		r.n, r.addr, r.err = tr.ReadNonQUICPacket(ctx, r.data[:])
+		resultCh <- r
+	}()
+
+	deadline := time.Now().Add(time.Second)
+	for !tr.readingNonQUICPackets.Load() {
+		if time.Now().After(deadline) {
+			t.Fatal("ReadNonQUICPacket did not start")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	sender, err := net.DialUDP("udp", nil, recvConn.LocalAddr().(*net.UDPAddr))
+	if err != nil {
+		t.Fatalf("dial sender: %v", err)
+	}
+	defer func() { _ = sender.Close() }()
+	if _, err := sender.Write([]byte{0, 1, 2, 3}); err != nil {
+		t.Fatalf("write packet: %v", err)
+	}
+
+	r := <-resultCh
+	if r.err != nil {
+		t.Fatalf("ReadNonQUICPacket: %v", r.err)
+	}
+	if r.n != 4 || r.data != [4]byte{0, 1, 2, 3} {
+		t.Fatalf("packet = %v (%d bytes), want [0 1 2 3]", r.data, r.n)
+	}
+	if r.addr != nil {
+		t.Fatalf("source address = %v, want nil", r.addr)
+	}
+}
+
+func TestPackageDialTransportKeepsSkipAddrReader(t *testing.T) {
+	conn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		t.Skipf("no loopback UDP: %v", err)
+	}
+	tr, err := setupTransport(conn, &tls.Config{}, false)
+	if err != nil {
+		t.Fatalf("setupTransport: %v", err)
+	}
+	if err := tr.init(tr.isSingleUse); err != nil {
+		t.Fatalf("init transport: %v", err)
+	}
+	oob, ok := tr.conn.(*oobConn)
+	if !ok {
+		t.Fatalf("wrapped connection has type %T, want *oobConn", tr.conn)
+	}
+	if oob.skipAddr == nil {
+		t.Fatal("package Dial transport must retain the skipAddr reader")
+	}
+	if err := tr.Close(); err != nil {
+		t.Fatalf("close transport: %v", err)
+	}
+}
 
 // TestSkipAddrBatchConnEquivalence sends datagrams over a real UDP socket
 // pair and checks that skipAddrBatchConn reports the same N / NN / Flags

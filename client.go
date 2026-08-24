@@ -97,8 +97,9 @@ func setupTransport(c net.PacketConn, tlsConf *tls.Config, createdPacketConn boo
 		return nil, errors.New("quic: tls.Config not set")
 	}
 	return &Transport{
-		Conn:        c,
-		createdConn: createdPacketConn,
-		isSingleUse: true,
+		Conn:            c,
+		createdConn:     createdPacketConn,
+		isSingleUse:     true,
+		skipAddrParsing: true,
 	}, nil
 }

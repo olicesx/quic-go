@@ -331,7 +331,10 @@ func (t *Transport) dial(ctx context.Context, hostname string) (quic.EarlyConnec
 			if err != nil {
 				return nil, nil, err
 			}
-			t.transport = &quic.Transport{Conn: udpConn}
+			t.transport = &quic.Transport{
+				Conn:               udpConn,
+				DisableAddrParsing: true,
+			}
 		}
 		dial = func(ctx context.Context, addr string, tlsCfg *tls.Config, cfg *quic.Config) (quic.EarlyConnection, error) {
 			network := "udp"

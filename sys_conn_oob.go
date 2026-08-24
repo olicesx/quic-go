@@ -68,9 +68,9 @@ type oobConn struct {
 	OOBCapablePacketConn
 	batchConn batchConn
 	// skipAddr, when non-nil, is the raw recvmmsg reader whose messages
-	// carry no source address. It starts as the active batchConn for
-	// client (dial-only) use; useAddrParsing switches the batchConn to
-	// x/net's address-parsing reader before the first server-side Listen.
+	// carry no source address. It starts as the active batchConn;
+	// useAddrParsing switches to x/net's address-parsing reader when the
+	// Transport mode requires source addresses.
 	skipAddr *skipAddrBatchConn
 
 	readPos uint8
@@ -84,8 +84,7 @@ type oobConn struct {
 var _ rawConn = &oobConn{}
 
 // enableAddrParsing swaps an oobConn's batch reader (if any) to x/net's
-// address-parsing reader, for server-side Listen use. It is a no-op for
-// other rawConn implementations.
+// address-parsing reader. It is a no-op for other rawConn implementations.
 func enableAddrParsing(conn rawConn) {
 	if oc, ok := conn.(*oobConn); ok {
 		oc.useAddrParsing()
@@ -93,8 +92,8 @@ func enableAddrParsing(conn rawConn) {
 }
 
 // useAddrParsing swaps the batch reader to one that parses the per-datagram
-// source address (x/net's). It is idempotent and must be called before any
-// server-side packet handling starts (i.e. from Listen).
+// source address (x/net's). It is idempotent and must be called before packet
+// handling starts.
 func (c *oobConn) useAddrParsing() {
 	if c.skipAddr != nil {
 		c.batchConn = ipv4.NewPacketConn(c.OOBCapablePacketConn)
