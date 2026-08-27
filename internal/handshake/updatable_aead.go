@@ -6,6 +6,7 @@ import (
 	"crypto/tls"
 	"encoding/binary"
 	"fmt"
+	"sync/atomic"
 	"time"
 
 	"github.com/olicesx/quic-go/internal/protocol"
@@ -14,13 +15,31 @@ import (
 	"github.com/olicesx/quic-go/logging"
 )
 
-// KeyUpdateInterval is the maximum number of packets we send or receive before initiating a key update.
-// It's a package-level variable to allow modifying it for testing purposes.
-var KeyUpdateInterval uint64 = protocol.KeyUpdateInterval
+// KeyUpdateInterval is the maximum number of packets we send or receive
+// before initiating a key update. The packing path reads it on every packet,
+// so tuning must go through SetKeyUpdateInterval instead of writing a shared
+// variable — the previous plain var raced against live connections.
+func KeyUpdateInterval() uint64 { return keyUpdateInterval.Load() }
 
-// FirstKeyUpdateInterval is the maximum number of packets we send or receive before initiating the first key update.
-// It's a package-level variable to allow modifying it for testing purposes.
-var FirstKeyUpdateInterval uint64 = 100
+// SetKeyUpdateInterval retunes KeyUpdateInterval race-safely.
+func SetKeyUpdateInterval(v uint64) { keyUpdateInterval.Store(v) }
+
+// FirstKeyUpdateInterval is the maximum number of packets we send or receive
+// before initiating the first key update.
+func FirstKeyUpdateInterval() uint64 { return firstKeyUpdateInterval.Load() }
+
+// SetFirstKeyUpdateInterval retunes FirstKeyUpdateInterval race-safely.
+func SetFirstKeyUpdateInterval(v uint64) { firstKeyUpdateInterval.Store(v) }
+
+var (
+	keyUpdateInterval      atomic.Uint64
+	firstKeyUpdateInterval atomic.Uint64
+)
+
+func init() {
+	keyUpdateInterval.Store(protocol.KeyUpdateInterval)
+	firstKeyUpdateInterval.Store(100)
+}
 
 type updatableAEAD struct {
 	suite *cipherSuite
@@ -289,15 +308,15 @@ func (a *updatableAEAD) shouldInitiateKeyUpdate() bool {
 	}
 	// Initiate the first key update shortly after the handshake, in order to exercise the key update mechanism.
 	if a.keyPhase == 0 {
-		if a.numRcvdWithCurrentKey >= FirstKeyUpdateInterval || a.numSentWithCurrentKey >= FirstKeyUpdateInterval {
+		if a.numRcvdWithCurrentKey >= FirstKeyUpdateInterval() || a.numSentWithCurrentKey >= FirstKeyUpdateInterval() {
 			return true
 		}
 	}
-	if a.numRcvdWithCurrentKey >= KeyUpdateInterval {
+	if a.numRcvdWithCurrentKey >= KeyUpdateInterval() {
 		a.logger.Debugf("Received %d packets with current key phase. Initiating key update to the next key phase: %d", a.numRcvdWithCurrentKey, a.keyPhase+1)
 		return true
 	}
-	if a.numSentWithCurrentKey >= KeyUpdateInterval {
+	if a.numSentWithCurrentKey >= KeyUpdateInterval() {
 		a.logger.Debugf("Sent %d packets with current key phase. Initiating key update to the next key phase: %d", a.numSentWithCurrentKey, a.keyPhase+1)
 		return true
 	}

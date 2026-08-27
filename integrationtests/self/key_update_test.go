@@ -15,9 +15,9 @@ import (
 )
 
 func TestKeyUpdates(t *testing.T) {
-	origKeyUpdateInterval := handshake.KeyUpdateInterval
-	t.Cleanup(func() { handshake.KeyUpdateInterval = origKeyUpdateInterval })
-	handshake.KeyUpdateInterval = 1 // update keys as frequently as possible
+	origKeyUpdateInterval := handshake.KeyUpdateInterval()
+	t.Cleanup(func() { handshake.SetKeyUpdateInterval(origKeyUpdateInterval) })
+	handshake.SetKeyUpdateInterval(1) // update keys as frequently as possible
 
 	var sentHeaders []*logging.ShortHeader
 	var receivedHeaders []*logging.ShortHeader
