@@ -24,13 +24,18 @@ type snapshotCongestionControl struct {
 }
 
 func (c *snapshotCongestionControl) SetRTTStatsProvider(congestionExt.RTTStatsProvider) {}
+
 func (c *snapshotCongestionControl) TimeUntilSend(congestionExt.ByteCount) time.Time {
 	return time.Time{}
 }
+
 func (c *snapshotCongestionControl) HasPacingBudget(time.Time) bool { return true }
+
 func (c *snapshotCongestionControl) OnPacketSent(time.Time, congestionExt.ByteCount, congestionExt.PacketNumber, congestionExt.ByteCount, bool) {
 }
+
 func (c *snapshotCongestionControl) CanSend(congestionExt.ByteCount) bool { return true }
+
 func (c *snapshotCongestionControl) MaybeExitSlowStart() {
 	if c.maybeExitEntered == nil {
 		return
@@ -38,19 +43,27 @@ func (c *snapshotCongestionControl) MaybeExitSlowStart() {
 	c.maybeExitOnce.Do(func() { close(c.maybeExitEntered) })
 	<-c.maybeExitRelease
 }
+
 func (c *snapshotCongestionControl) OnPacketAcked(congestionExt.PacketNumber, congestionExt.ByteCount, congestionExt.ByteCount, time.Time) {
 	c.acked.Add(1)
 }
+
 func (c *snapshotCongestionControl) OnCongestionEvent(congestionExt.PacketNumber, congestionExt.ByteCount, congestionExt.ByteCount) {
 	c.lost.Add(1)
 }
+
 func (c *snapshotCongestionControl) OnCongestionEventEx(congestionExt.ByteCount, time.Time, []congestionExt.AckedPacketInfo, []congestionExt.LostPacketInfo) {
 	c.extended.Add(1)
 }
-func (c *snapshotCongestionControl) OnRetransmissionTimeout(bool)                 {}
-func (c *snapshotCongestionControl) SetMaxDatagramSize(congestionExt.ByteCount)   {}
-func (c *snapshotCongestionControl) InSlowStart() bool                            { return false }
-func (c *snapshotCongestionControl) InRecovery() bool                             { return false }
+
+func (c *snapshotCongestionControl) OnRetransmissionTimeout(bool) {}
+
+func (c *snapshotCongestionControl) SetMaxDatagramSize(congestionExt.ByteCount) {}
+
+func (c *snapshotCongestionControl) InSlowStart() bool { return false }
+
+func (c *snapshotCongestionControl) InRecovery() bool { return false }
+
 func (c *snapshotCongestionControl) GetCongestionWindow() congestionExt.ByteCount { return 1 << 20 }
 
 func TestReceivedAckUsesSingleCongestionSnapshot(t *testing.T) {
