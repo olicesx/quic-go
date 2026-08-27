@@ -107,7 +107,13 @@ type datagramQueue struct {
 
 	rcvMx    sync.Mutex
 	rcvQueue [][]byte
-	rcvd     chan struct{} // used to notify Receive that a new datagram was received
+	// rcvHead indexes the next unconsumed entry in rcvQueue. Consuming by
+	// index instead of re-slicing keeps the pre-allocated backing array
+	// usable: [1:] would monotonically shrink the appendable window until a
+	// reallocation copies the whole queue, and the queue is compacted back
+	// to rcvQueue[:0] every time it drains empty.
+	rcvHead int
+	rcvd    chan struct{} // used to notify Receive that a new datagram was received
 
 	closeErr error
 	closed   chan struct{}
@@ -225,7 +231,13 @@ func (h *datagramQueue) HandleDatagramFrame(f *wire.DatagramFrame) {
 	wire.PutDatagramFrame(f)
 	var queued bool
 	h.rcvMx.Lock()
-	if len(h.rcvQueue) < maxDatagramRcvQueueLen {
+	if len(h.rcvQueue)-h.rcvHead < maxDatagramRcvQueueLen {
+		// Compact once the queue fully drains so the pre-allocated backing
+		// array stays usable without ever copying live entries.
+		if h.rcvHead > 0 && h.rcvHead == len(h.rcvQueue) {
+			h.rcvQueue = h.rcvQueue[:0]
+			h.rcvHead = 0
+		}
 		h.rcvQueue = append(h.rcvQueue, buf)
 		queued = true
 		select {
@@ -266,9 +278,9 @@ func (h *datagramQueue) ReleaseDatagram(data []byte) {
 func (h *datagramQueue) Receive(ctx context.Context) ([]byte, error) {
 	for {
 		h.rcvMx.Lock()
-		if len(h.rcvQueue) > 0 {
-			data := h.rcvQueue[0]
-			h.rcvQueue = h.rcvQueue[1:]
+		if h.rcvHead < len(h.rcvQueue) {
+			data := h.rcvQueue[h.rcvHead]
+			h.rcvHead++
 			h.rcvMx.Unlock()
 			return data, nil
 		}
@@ -296,9 +308,10 @@ func (h *datagramQueue) CloseWithError(e error) {
 	}
 	h.sendMx.Unlock()
 	h.rcvMx.Lock()
-	for _, buf := range h.rcvQueue {
+	for _, buf := range h.rcvQueue[h.rcvHead:] {
 		datagramBufPool.Put(buf)
 	}
 	h.rcvQueue = h.rcvQueue[:0]
+	h.rcvHead = 0
 	h.rcvMx.Unlock()
 }
