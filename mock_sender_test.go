@@ -129,6 +129,34 @@ func (mr *MockSenderMockRecorder) Run() *MockSenderRunCall {
 	return &MockSenderRunCall{Call: call}
 }
 
+// RunStopped mocks base method.
+func (m *MockSender) RunStopped() <-chan struct{} {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "RunStopped")
+	ret0, _ := ret[0].(<-chan struct{})
+	return ret0
+}
+
+// RunStopped indicates an expected call of RunStopped.
+func (mr *MockSenderMockRecorder) RunStopped() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "RunStopped", reflect.TypeOf((*MockSender)(nil).RunStopped))
+}
+
+// LastRunError mocks base method.
+func (m *MockSender) LastRunError() error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "LastRunError")
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// LastRunError indicates an expected call of LastRunError.
+func (mr *MockSenderMockRecorder) LastRunError() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "LastRunError", reflect.TypeOf((*MockSender)(nil).LastRunError))
+}
+
 // MockSenderRunCall wrap *gomock.Call
 type MockSenderRunCall struct {
 	*gomock.Call

@@ -2027,11 +2027,24 @@ func (s *connection) sendPacketsWithGSO(now time.Time) error {
 				oversize.Data = append(oversize.Data, buf.Data[len(buf.Data)-int(size):]...)
 				buf.Data = buf.Data[:len(buf.Data)-int(size)]
 				s.sendQueue.Send(buf, uint16(segSize), ecn)
-				if s.sendQueue.WouldBlock() {
+				for s.sendQueue.WouldBlock() {
 					// The peeled packet must still go out: it is already
-					// in the sent-packet handler. Wait for a queue slot
-					// rather than dropping it or panicking on Send.
-					<-s.sendQueue.Available()
+					// in the sent-packet handler. Wait for a queue slot.
+					// If the sender goroutine exited (write error surfaced
+					// via destroyImpl), no further tokens will ever be
+					// produced — abort the wait and let the run loop unwind
+					// into the close path instead of deadlocking against it.
+					select {
+					case <-s.sendQueue.Available():
+					case <-s.sendQueue.RunStopped():
+						// The oversized copy never enters the send queue,
+						// so hand its buffer back before unwinding.
+						oversize.Release()
+						if qerr := s.sendQueue.LastRunError(); qerr != nil {
+							return qerr
+						}
+						return errSendQueueStopped
+					}
 				}
 				buf = oversize
 				segSize = size

@@ -1,12 +1,23 @@
 package quic
 
-import "github.com/olicesx/quic-go/internal/protocol"
+import (
+	"errors"
+	"sync"
+
+	"github.com/olicesx/quic-go/internal/protocol"
+)
 
 type sender interface {
 	Send(p *packetBuffer, gsoSize uint16, ecn protocol.ECN)
 	Run() error
 	WouldBlock() bool
 	Available() <-chan struct{}
+	// RunStopped is closed once the run loop returned, whether cleanly or
+	// on a write error. Waiters on Available must also select on it, or a
+	// sender death would strand them forever (no further tokens exist).
+	RunStopped() <-chan struct{}
+	// LastRunError reports the error that terminated the run loop, if any.
+	LastRunError() error
 	Close()
 }
 
@@ -16,12 +27,17 @@ type queueEntry struct {
 	ecn     protocol.ECN
 }
 
+var errSendQueueStopped = errors.New("quic: send queue stopped")
+
 type sendQueue struct {
 	queue       chan queueEntry
-	closeCalled chan struct{} // runStopped when Close() is called
-	runStopped  chan struct{} // runStopped when the run loop returns
+	closeCalled chan struct{} // closed when Close() is called
+	runStopped  chan struct{} // closed when the run loop returns
 	available   chan struct{}
 	conn        sendConn
+
+	errMu   sync.Mutex
+	lastErr error // the error that terminated Run, set before runStopped closes
 }
 
 var _ sender = &sendQueue{}
@@ -65,6 +81,16 @@ func (h *sendQueue) Available() <-chan struct{} {
 	return h.available
 }
 
+func (h *sendQueue) RunStopped() <-chan struct{} {
+	return h.runStopped
+}
+
+func (h *sendQueue) LastRunError() error {
+	h.errMu.Lock()
+	defer h.errMu.Unlock()
+	return h.lastErr
+}
+
 func (h *sendQueue) Run() error {
 	defer close(h.runStopped)
 	var shouldClose bool
@@ -84,6 +110,9 @@ func (h *sendQueue) Run() error {
 				// 2. Path MTU discovery,and
 				// 3. Eventual detection of loss PingFrame.
 				if !isSendMsgSizeErr(err) {
+					h.errMu.Lock()
+					h.lastErr = err
+					h.errMu.Unlock()
 					return err
 				}
 			}
