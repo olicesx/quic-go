@@ -3,6 +3,8 @@ package http3
 import (
 	"errors"
 	"fmt"
+	"io"
+	"math"
 	"net/http"
 	"net/textproto"
 	"net/url"
@@ -13,6 +15,13 @@ import (
 
 	"github.com/quic-go/qpack"
 )
+
+type qpackError struct{ err error }
+
+func (e *qpackError) Error() string { return fmt.Sprintf("qpack: %v", e.err) }
+func (e *qpackError) Unwrap() error { return e.err }
+
+var errHeaderTooLarge = errors.New("http3: headers too large")
 
 type header struct {
 	// Pseudo header fields defined in RFC 9114
@@ -38,11 +47,38 @@ var invalidHeaderFields = [...]string{
 	"upgrade",
 }
 
+func decodeFromSlice(headers []qpack.HeaderField) qpack.DecodeFunc {
+	var i int
+	return func() (qpack.HeaderField, error) {
+		if i >= len(headers) {
+			return qpack.HeaderField{}, io.EOF
+		}
+		h := headers[i]
+		i++
+		return h, nil
+	}
+}
+
 func parseHeaders(headers []qpack.HeaderField, isRequest bool) (header, error) {
-	hdr := header{Headers: make(http.Header, len(headers))}
+	return parseHeadersIncremental(decodeFromSlice(headers), isRequest, math.MaxInt)
+}
+
+func parseHeadersIncremental(decode qpack.DecodeFunc, isRequest bool, sizeLimit int) (header, error) {
+	hdr := header{Headers: make(http.Header)}
 	var readFirstRegularHeader, readContentLength bool
 	var contentLengthStr string
-	for _, h := range headers {
+	for {
+		h, err := decode()
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			return header{}, &qpackError{err: err}
+		}
+		sizeLimit -= len(h.Name) + len(h.Value) + 32
+		if sizeLimit < 0 {
+			return header{}, errHeaderTooLarge
+		}
 		// field names need to be lowercase, see section 4.2 of RFC 9114
 		if strings.ToLower(h.Name) != h.Name {
 			return header{}, fmt.Errorf("header field is not lower-case: %s", h.Name)
@@ -121,8 +157,23 @@ func parseHeaders(headers []qpack.HeaderField, isRequest bool) (header, error) {
 }
 
 func parseTrailers(headers []qpack.HeaderField) (http.Header, error) {
-	h := make(http.Header, len(headers))
-	for _, field := range headers {
+	return parseTrailersIncremental(decodeFromSlice(headers), math.MaxInt)
+}
+
+func parseTrailersIncremental(decode qpack.DecodeFunc, sizeLimit int) (http.Header, error) {
+	h := make(http.Header)
+	for {
+		field, err := decode()
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			return nil, &qpackError{err: err}
+		}
+		sizeLimit -= len(field.Name) + len(field.Value) + 32
+		if sizeLimit < 0 {
+			return nil, errHeaderTooLarge
+		}
 		if field.IsPseudo() {
 			return nil, fmt.Errorf("http3: received pseudo header in trailer: %s", field.Name)
 		}
@@ -132,7 +183,11 @@ func parseTrailers(headers []qpack.HeaderField) (http.Header, error) {
 }
 
 func requestFromHeaders(headerFields []qpack.HeaderField) (*http.Request, error) {
-	hdr, err := parseHeaders(headerFields, true)
+	return requestFromHeadersIncremental(decodeFromSlice(headerFields), math.MaxInt)
+}
+
+func requestFromHeadersIncremental(decode qpack.DecodeFunc, sizeLimit int) (*http.Request, error) {
+	hdr, err := parseHeadersIncremental(decode, true, sizeLimit)
 	if err != nil {
 		return nil, err
 	}
@@ -213,7 +268,11 @@ func hostnameFromURL(url *url.URL) string {
 // It is only called for the HTTP header (and not the HTTP trailer).
 // It takes an http.Response as an argument to allow the caller to set the trailer later on.
 func updateResponseFromHeaders(rsp *http.Response, headerFields []qpack.HeaderField) error {
-	hdr, err := parseHeaders(headerFields, false)
+	return updateResponseFromHeadersIncremental(rsp, decodeFromSlice(headerFields), math.MaxInt)
+}
+
+func updateResponseFromHeadersIncremental(rsp *http.Response, decode qpack.DecodeFunc, sizeLimit int) error {
+	hdr, err := parseHeadersIncremental(decode, false, sizeLimit)
 	if err != nil {
 		return err
 	}

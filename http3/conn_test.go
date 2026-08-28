@@ -354,7 +354,9 @@ var _ = Describe("Connection", func() {
 		})
 
 		It("closes the connection if it can't parse the quarter stream ID", func() {
-			qconn.EXPECT().ReceiveDatagram(gomock.Any()).Return([]byte{128}, nil) // return an invalid varint
+			b := []byte{128} // invalid varint
+			qconn.EXPECT().ReceiveDatagram(gomock.Any()).Return(b, nil)
+			qconn.EXPECT().ReleaseDatagram(b)
 			done := make(chan struct{})
 			qconn.EXPECT().CloseWithError(qerr.ApplicationErrorCode(ErrCodeDatagramError), gomock.Any()).Do(func(qerr.ApplicationErrorCode, string) error {
 				close(done)
@@ -370,6 +372,7 @@ var _ = Describe("Connection", func() {
 		It("closes the connection if the quarter stream ID is invalid", func() {
 			b := quicvarint.Append([]byte{}, maxQuarterStreamID+1)
 			qconn.EXPECT().ReceiveDatagram(gomock.Any()).Return(b, nil)
+			qconn.EXPECT().ReleaseDatagram(b)
 			done := make(chan struct{})
 			qconn.EXPECT().CloseWithError(qerr.ApplicationErrorCode(ErrCodeDatagramError), gomock.Any()).Do(func(qerr.ApplicationErrorCode, string) error {
 				close(done)
@@ -392,6 +395,12 @@ var _ = Describe("Connection", func() {
 				close(delivered)
 				return b, nil
 			})
+			qconn.EXPECT().ReleaseDatagram(b)
+			done := make(chan struct{})
+			qconn.EXPECT().ReceiveDatagram(gomock.Any()).DoAndReturn(func(context.Context) ([]byte, error) {
+				close(done)
+				return nil, errors.New("test done")
+			})
 			go func() {
 				defer GinkgoRecover()
 				conn.handleUnidirectionalStreams(nil)
@@ -409,6 +418,7 @@ var _ = Describe("Connection", func() {
 			cancel()
 			_, err = str.ReceiveDatagram(ctx)
 			Expect(err).To(MatchError(context.Canceled))
+			Eventually(done).Should(BeClosed())
 		})
 
 		It("delivers datagrams for existing streams", func() {
@@ -426,7 +436,12 @@ var _ = Describe("Connection", func() {
 			b := quicvarint.Append([]byte{}, strID/4)
 			b = append(b, []byte("foobar")...)
 			qconn.EXPECT().ReceiveDatagram(gomock.Any()).Return(b, nil)
-			qconn.EXPECT().ReceiveDatagram(gomock.Any()).Return(nil, errors.New("test done"))
+			qconn.EXPECT().ReleaseDatagram(b).Do(func(data []byte) { clear(data) })
+			done := make(chan struct{})
+			qconn.EXPECT().ReceiveDatagram(gomock.Any()).DoAndReturn(func(context.Context) ([]byte, error) {
+				close(done)
+				return nil, errors.New("test done")
+			})
 			go func() {
 				defer GinkgoRecover()
 				conn.handleUnidirectionalStreams(nil)
@@ -435,6 +450,7 @@ var _ = Describe("Connection", func() {
 			data, err := str.ReceiveDatagram(context.Background())
 			Expect(err).ToNot(HaveOccurred())
 			Expect(data).To(Equal([]byte("foobar")))
+			Eventually(done).Should(BeClosed())
 		})
 
 		It("sends datagrams", func() {

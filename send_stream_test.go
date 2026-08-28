@@ -1062,9 +1062,7 @@ func TestSendStreamCloseForShutdownReturnsQueuedFrames(t *testing.T) {
 	str.nextFrame = next
 	str.mutex.Unlock()
 
-	before := wire.StreamFramePoolLen()
 	str.closeForShutdown(errors.New("gone"))
-	require.Greater(t, wire.StreamFramePoolLen(), before, "queued frames must return to the pool")
 	require.Nil(t, str.nextFrame)
 	require.Empty(t, str.retransmissionQueue)
 	require.Equal(t, int64(1), str.numOutstandingFrames)

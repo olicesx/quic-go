@@ -155,18 +155,90 @@ func TestSendQueueWriteError(t *testing.T) {
 		t.Fatal("timeout")
 	}
 
-	// further calls to Send should not block
-	sent := make(chan struct{})
-	go func() {
-		defer close(sent)
-		for i := 0; i < 2*sendQueueCapacity; i++ {
-			q.Send(getPacketWithContents([]byte("raboof")), 6, protocol.ECNNon)
-		}
-	}()
+	// Further calls must release their buffers and surface the fatal sender
+	// error so the connection doesn't retain phantom sent-packet state.
+	for i := 0; i < 2*sendQueueCapacity; i++ {
+		buf := getPacketWithContents([]byte("raboof"))
+		require.EqualError(t, q.Send(buf, 6, protocol.ECNNon), "test error")
+		require.Zero(t, buf.refCount)
+	}
+}
 
+func TestSendQueueFatalWriteDrainsAndReleasesBuffers(t *testing.T) {
+	mockCtrl := gomock.NewController(t)
+	c := NewMockSendConn(mockCtrl)
+	q := newSendQueue(c).(*sendQueue)
+
+	buffers := make([]*packetBuffer, 0, sendQueueCapacity)
+	for i := 0; i < sendQueueCapacity; i++ {
+		buf := getPacketWithContents([]byte{byte(i)})
+		buffers = append(buffers, buf)
+		q.Send(buf, uint16(1200+i), protocol.ECT0)
+	}
+	c.EXPECT().Write([]byte{0}, uint16(1200), protocol.ECT0).Return(errors.New("fatal write"))
+	require.EqualError(t, q.Run(), "fatal write")
+	require.EqualError(t, q.LastRunError(), "fatal write")
 	select {
-	case <-sent:
+	case <-q.RunStopped():
+	default:
+		t.Fatal("RunStopped must close when Run exits")
+	}
+
+	for _, buf := range buffers {
+		require.Zero(t, buf.refCount, "buffer was not released after fatal write")
+	}
+}
+
+func TestSendQueueSerializesSendAgainstStopDrain(t *testing.T) {
+	mockCtrl := gomock.NewController(t)
+	c := NewMockSendConn(mockCtrl)
+	q := newSendQueue(c).(*sendQueue)
+	fatal := getPacketWithContents([]byte("fatal"))
+	q.Send(fatal, 1200, protocol.ECNNon)
+
+	writeStarted := make(chan struct{})
+	c.EXPECT().Write([]byte("fatal"), uint16(1200), protocol.ECNNon).DoAndReturn(
+		func([]byte, uint16, protocol.ECN) error {
+			close(writeStarted)
+			return errors.New("fatal write")
+		},
+	)
+	// Hold a reader so Run reaches its stopping writer lock deterministically.
+	q.stateMu.RLock()
+	runDone := make(chan error, 1)
+	go func() { runDone <- q.Run() }()
+	<-writeStarted
+
+	late := getPacketWithContents([]byte("late"))
+	sendErr := make(chan error, 1)
+	go func() { sendErr <- q.Send(late, 1200, protocol.ECNNon) }()
+	q.stateMu.RUnlock()
+
+	require.EqualError(t, <-runDone, "fatal write")
+	select {
+	case err := <-sendErr:
+		require.EqualError(t, err, "fatal write")
 	case <-time.After(time.Second):
-		t.Fatal("timeout")
+		t.Fatal("Send did not observe the stopped queue")
+	}
+	require.Zero(t, fatal.refCount)
+	require.Zero(t, late.refCount)
+}
+
+func TestSendQueueCloseIsIdempotent(t *testing.T) {
+	mockCtrl := gomock.NewController(t)
+	q := newSendQueue(NewMockSendConn(mockCtrl))
+	go func() { require.NoError(t, q.Run()) }()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		q.Close()
+		q.Close()
+	}()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("idempotent Close blocked")
 	}
 }

@@ -791,6 +791,13 @@ func (s *connection) handleHandshakeComplete(now time.Time) error {
 }
 
 func (s *connection) handleHandshakeConfirmed(now time.Time) error {
+	// Initial keys are normally dropped earlier in the handshake, but a
+	// misbehaving peer can skip the packet that triggers that path.
+	if !s.droppedInitialKeys {
+		if err := s.dropEncryptionLevel(protocol.EncryptionInitial, now); err != nil {
+			return err
+		}
+	}
 	if err := s.dropEncryptionLevel(protocol.EncryptionHandshake, now); err != nil {
 		return err
 	}
@@ -1901,7 +1908,9 @@ func (s *connection) sendPackets(now time.Time) error {
 		ecn := s.sentPacketHandler.ECNMode(true)
 		s.logShortHeaderPacket(p.DestConnID, p.Ack, p.Frames, p.StreamFrames, p.PacketNumber, p.PacketNumberLen, p.KeyPhase, ecn, buf.Len(), false)
 		s.registerPackedShortHeaderPacket(p, ecn, now)
-		s.sendQueue.Send(buf, 0, ecn)
+		if err := s.sendQueue.Send(buf, 0, ecn); err != nil {
+			return err
+		}
 		// There's (likely) more data to send. Loop around again.
 		s.scheduleSending()
 		return nil
@@ -1950,7 +1959,9 @@ func (s *connection) sendPacketsWithoutGSO(now time.Time) error {
 			return err
 		}
 
-		s.sendQueue.Send(buf, 0, ecn)
+		if err := s.sendQueue.Send(buf, 0, ecn); err != nil {
+			return err
+		}
 
 		if s.sendQueue.WouldBlock() {
 			return nil
@@ -2026,7 +2037,10 @@ func (s *connection) sendPacketsWithGSO(now time.Time) error {
 				oversize := getLargePacketBuffer()
 				oversize.Data = append(oversize.Data, buf.Data[len(buf.Data)-int(size):]...)
 				buf.Data = buf.Data[:len(buf.Data)-int(size)]
-				s.sendQueue.Send(buf, uint16(segSize), ecn)
+				if err := s.sendQueue.Send(buf, uint16(segSize), ecn); err != nil {
+					oversize.Release()
+					return err
+				}
 				for s.sendQueue.WouldBlock() {
 					// The peeled packet must still go out: it is already
 					// in the sent-packet handler. Wait for a queue slot.
@@ -2084,7 +2098,9 @@ func (s *connection) sendPacketsWithGSO(now time.Time) error {
 				continue
 			}
 
-			s.sendQueue.Send(buf, uint16(segSize), ecn)
+			if err := s.sendQueue.Send(buf, uint16(segSize), ecn); err != nil {
+				return err
+			}
 			// Reset the batch state: the next batch starts fresh and its
 			// first packet determines the new segment size.
 			segSize = 0
@@ -2141,8 +2157,7 @@ func (s *connection) maybeSendAckOnlyPacket(now time.Time) error {
 	}
 	s.logShortHeaderPacket(p.DestConnID, p.Ack, p.Frames, p.StreamFrames, p.PacketNumber, p.PacketNumberLen, p.KeyPhase, ecn, buf.Len(), false)
 	s.registerPackedShortHeaderPacket(p, ecn, now)
-	s.sendQueue.Send(buf, 0, ecn)
-	return nil
+	return s.sendQueue.Send(buf, 0, ecn)
 }
 
 func (s *connection) sendProbePacket(sendMode ackhandler.SendMode, now time.Time) error {
@@ -2246,8 +2261,7 @@ func (s *connection) sendPackedCoalescedPacket(packet *coalescedPacket, ecn prot
 		s.sentPacketHandler.SentPacket(now, p.PacketNumber, largestAcked, p.StreamFrames, p.Frames, protocol.Encryption1RTT, ecn, p.Length, p.IsPathMTUProbePacket)
 	}
 	s.connIDManager.SentPacket()
-	s.sendQueue.Send(packet.buffer, 0, ecn)
-	return nil
+	return s.sendQueue.Send(packet.buffer, 0, ecn)
 }
 
 func (s *connection) sendConnectionClose(e error) ([]byte, error) {

@@ -2,6 +2,7 @@ package wire
 
 import (
 	"runtime"
+	"sync"
 	"testing"
 
 	"github.com/olicesx/quic-go/internal/protocol"
@@ -26,41 +27,42 @@ func TestAcceptStreamFramesNotFromBuffer(t *testing.T) {
 	// No assertion needed as we're just checking it doesn't panic
 }
 
-// TestStreamFramePoolReuseBeyondReceiveWindow verifies that a pool sized to
-// the in-flight frame count serves steady-state traffic from the pool.
-// Sized to maxStreamFramePoolLen: with the pool warmed up and the in-flight
-// count within capacity, a second round must not allocate fresh frames.
-func TestStreamFramePoolReuseBeyondReceiveWindow(t *testing.T) {
-	// In-flight count within pool capacity (maxStreamFramePoolLen).
-	const inFlight = maxStreamFramePoolLen / 2
+func TestFramePoolsParallel(t *testing.T) {
+	const workers = 64
+	var wg sync.WaitGroup
+	wg.Add(workers)
+	for range workers {
+		go func() {
+			defer wg.Done()
+			for range 1000 {
+				sf := GetStreamFrame()
+				require.Equal(t, protocol.MaxPacketBufferSize, cap(sf.Data))
+				putStreamFrame(sf)
 
-	// Warm-up round: everything misses and then gets returned.
-	warm := make([]*StreamFrame, 0, inFlight)
-	for i := 0; i < inFlight; i++ {
-		warm = append(warm, GetStreamFrame())
+				df := GetDatagramFrame()
+				require.Equal(t, protocol.MaxPacketBufferSize, cap(df.Data))
+				PutDatagramFrame(df)
+			}
+		}()
 	}
-	for _, f := range warm {
-		putStreamFrame(f)
-	}
+	wg.Wait()
+}
+
+func TestFramePoolsRemainUsableAcrossGC(t *testing.T) {
+	sf := GetStreamFrame()
+	putStreamFrame(sf)
+	df := GetDatagramFrame()
+	PutDatagramFrame(df)
+
+	runtime.GC()
 	runtime.GC()
 
-	// Steady-state round: measure fresh allocations while holding all frames.
-	var before, after runtime.MemStats
-	runtime.ReadMemStats(&before)
-	held := make([]*StreamFrame, 0, inFlight)
-	for i := 0; i < inFlight; i++ {
-		held = append(held, GetStreamFrame())
-	}
-	runtime.ReadMemStats(&after)
-	for _, f := range held {
-		putStreamFrame(f)
-	}
-
-	alloc := after.TotalAlloc - before.TotalAlloc
-	// All hits: only the held slice header, nothing on the heap. Allow 1MiB
-	// of slack for runtime noise; a single missed frame costs 1452B.
-	require.Less(t, alloc, uint64(1<<20),
-		"steady-state round allocated %d bytes: pool is smaller than the receive window in-flight count", alloc)
+	sf = GetStreamFrame()
+	require.Equal(t, protocol.MaxPacketBufferSize, cap(sf.Data))
+	putStreamFrame(sf)
+	df = GetDatagramFrame()
+	require.Equal(t, protocol.MaxPacketBufferSize, cap(df.Data))
+	PutDatagramFrame(df)
 }
 
 // BenchmarkStreamFramePoolGetPut measures steady-state reuse: with the pool

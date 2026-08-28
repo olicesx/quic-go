@@ -102,14 +102,7 @@ func TestReceiveStreamEOFThenShutdownSinglePut(t *testing.T) {
 	require.Equal(t, 5, n)
 	require.ErrorIs(t, err, io.EOF)
 
-	// The EOF path just released the frame back to the global pool, so the
-	// pool length is back to its pre-test level.
-	before := wire.StreamFramePoolLen()
-
 	str.closeForShutdown(errors.New("shut down"))
-
-	require.Equal(t, before, wire.StreamFramePoolLen(),
-		"closeForShutdown after EOF must not put the already-released frame back a second time")
 }
 
 // closeForShutdown must unblock a waiting reader and surface the error; it

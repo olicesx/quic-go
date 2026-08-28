@@ -229,9 +229,11 @@ func (c *MockSenderRunStoppedCall) DoAndReturn(f func() <-chan struct{}) *MockSe
 }
 
 // Send mocks base method.
-func (m *MockSender) Send(p *packetBuffer, gsoSize uint16, ecn protocol.ECN) {
+func (m *MockSender) Send(p *packetBuffer, gsoSize uint16, ecn protocol.ECN) error {
 	m.ctrl.T.Helper()
-	m.ctrl.Call(m, "Send", p, gsoSize, ecn)
+	ret := m.ctrl.Call(m, "Send", p, gsoSize, ecn)
+	ret0, _ := ret[0].(error)
+	return ret0
 }
 
 // Send indicates an expected call of Send.
@@ -247,19 +249,19 @@ type MockSenderSendCall struct {
 }
 
 // Return rewrite *gomock.Call.Return
-func (c *MockSenderSendCall) Return() *MockSenderSendCall {
-	c.Call = c.Call.Return()
+func (c *MockSenderSendCall) Return(arg0 error) *MockSenderSendCall {
+	c.Call = c.Call.Return(arg0)
 	return c
 }
 
 // Do rewrite *gomock.Call.Do
-func (c *MockSenderSendCall) Do(f func(*packetBuffer, uint16, protocol.ECN)) *MockSenderSendCall {
+func (c *MockSenderSendCall) Do(f func(*packetBuffer, uint16, protocol.ECN) error) *MockSenderSendCall {
 	c.Call = c.Call.Do(f)
 	return c
 }
 
 // DoAndReturn rewrite *gomock.Call.DoAndReturn
-func (c *MockSenderSendCall) DoAndReturn(f func(*packetBuffer, uint16, protocol.ECN)) *MockSenderSendCall {
+func (c *MockSenderSendCall) DoAndReturn(f func(*packetBuffer, uint16, protocol.ECN) error) *MockSenderSendCall {
 	c.Call = c.Call.DoAndReturn(f)
 	return c
 }

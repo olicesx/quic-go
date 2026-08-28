@@ -1,14 +1,85 @@
 package http3
 
 import (
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
+	"testing"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"github.com/quic-go/qpack"
+	"github.com/stretchr/testify/require"
 )
+
+func TestIncrementalFieldSectionSizeLimits(t *testing.T) {
+	const limit = len("x") + len("value") + 32
+	tests := []struct {
+		name  string
+		parse func(qpack.DecodeFunc, int) error
+	}{
+		{
+			name: "request headers",
+			parse: func(decode qpack.DecodeFunc, size int) error {
+				_, err := requestFromHeadersIncremental(decode, size)
+				return err
+			},
+		},
+		{
+			name: "response headers",
+			parse: func(decode qpack.DecodeFunc, size int) error {
+				return updateResponseFromHeadersIncremental(&http.Response{}, decode, size)
+			},
+		},
+		{
+			name: "trailers",
+			parse: func(decode qpack.DecodeFunc, size int) error {
+				_, err := parseTrailersIncremental(decode, size)
+				return err
+			},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			calls := 0
+			decode := func() (qpack.HeaderField, error) {
+				calls++
+				return qpack.HeaderField{Name: "x", Value: "value"}, nil
+			}
+			err := tc.parse(decode, limit-1)
+			require.ErrorIs(t, err, errHeaderTooLarge)
+			require.Equal(t, 1, calls, "decoder must stop immediately after crossing the limit")
+		})
+	}
+}
+
+func TestIncrementalQPACKErrorsAreClassified(t *testing.T) {
+	decodeErr := errors.New("decode failed")
+	_, err := parseTrailersIncremental(func() (qpack.HeaderField, error) {
+		return qpack.HeaderField{}, decodeErr
+	}, 100)
+	var qerr *qpackError
+	require.ErrorAs(t, err, &qerr)
+	require.ErrorIs(t, err, decodeErr)
+	require.Equal(t, "QPACK_DECOMPRESSION_FAILED", ErrCodeQPACKDecompressionFailed.String())
+}
+
+func decodeQPACKHeaderFields(decoder *qpack.Decoder, data []byte) ([]qpack.HeaderField, error) {
+	decode := decoder.Decode(data)
+	var fields []qpack.HeaderField
+	for {
+		field, err := decode()
+		if err != nil {
+			if err == io.EOF {
+				return fields, nil
+			}
+			return nil, err
+		}
+		fields = append(fields, field)
+	}
+}
 
 var _ = Describe("Request", func() {
 	It("populates requests", func() {

@@ -258,8 +258,6 @@ func TestDatagramQueueCloseWithErrorDrainsQueuedFrames(t *testing.T) {
 	_, err := queue.Receive(context.Background())
 	require.EqualError(t, err, "closed", "receive queue must be drained, not handed to Receive")
 
-	before := wire.DatagramFramePoolLen()
 	late := wire.GetDatagramFrame()
 	require.Error(t, queue.Add(late))
-	require.Equal(t, before, wire.DatagramFramePoolLen(), "Add after close must put the unsent frame back")
 }

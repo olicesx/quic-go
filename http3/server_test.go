@@ -96,7 +96,7 @@ var _ = Describe("Server", func() {
 
 		decodeHeader := func(str io.Reader) map[string][]string {
 			fields := make(map[string][]string)
-			decoder := qpack.NewDecoder(nil)
+			decoder := qpack.NewDecoder()
 
 			fp := frameParser{r: str}
 			frame, err := fp.ParseNext()
@@ -106,7 +106,7 @@ var _ = Describe("Server", func() {
 			data := make([]byte, headersFrame.Length)
 			_, err = io.ReadFull(str, data)
 			ExpectWithOffset(1, err).ToNot(HaveOccurred())
-			hfs, err := decoder.DecodeFull(data)
+			hfs, err := decodeQPACKHeaderFields(decoder, data)
 			ExpectWithOffset(1, err).ToNot(HaveOccurred())
 			for _, p := range hfs {
 				fields[p.Name] = append(fields[p.Name], p.Value)
@@ -140,7 +140,7 @@ var _ = Describe("Server", func() {
 			examplePostRequest, err = http.NewRequest("POST", "https://www.example.com", bytes.NewReader([]byte("foobar")))
 			Expect(err).ToNot(HaveOccurred())
 
-			qpackDecoder = qpack.NewDecoder(nil)
+			qpackDecoder = qpack.NewDecoder()
 			str = mockquic.NewMockStream(mockCtrl)
 			str.EXPECT().Context().Return(reqContext).AnyTimes()
 			str.EXPECT().StreamID().AnyTimes()
@@ -623,7 +623,7 @@ var _ = Describe("Server", func() {
 				data := make([]byte, df.Length)
 				_, err = io.ReadFull(&buf, data)
 				Expect(err).ToNot(HaveOccurred())
-				hdrs, err := qpackDecoder.DecodeFull(data)
+				hdrs, err := decodeQPACKHeaderFields(qpackDecoder, data)
 				Expect(err).ToNot(HaveOccurred())
 				Expect(hdrs).To(ContainElement(qpack.HeaderField{Name: ":status", Value: "200"}))
 				Expect(buf.Bytes()).To(Equal([]byte("foobar")))
@@ -682,6 +682,22 @@ var _ = Describe("Server", func() {
 					close(done)
 					return nil
 				})
+				s.handleConn(conn)
+				Eventually(done).Should(BeClosed())
+			})
+
+			It("closes the connection on a QPACK decoding error", func() {
+				b := (&headersFrame{Length: 1}).Append(nil)
+				setRequest(append(b, 0xff)) // truncated QPACK field-section prefix
+				done := make(chan struct{})
+				conn.EXPECT().CloseWithError(
+					quic.ApplicationErrorCode(ErrCodeQPACKDecompressionFailed),
+					gomock.Any(),
+				).Do(func(quic.ApplicationErrorCode, string) error {
+					close(done)
+					return nil
+				})
+
 				s.handleConn(conn)
 				Eventually(done).Should(BeClosed())
 			})

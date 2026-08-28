@@ -8,7 +8,7 @@ import (
 )
 
 type sender interface {
-	Send(p *packetBuffer, gsoSize uint16, ecn protocol.ECN)
+	Send(p *packetBuffer, gsoSize uint16, ecn protocol.ECN) error
 	Run() error
 	WouldBlock() bool
 	Available() <-chan struct{}
@@ -36,8 +36,12 @@ type sendQueue struct {
 	available   chan struct{}
 	conn        sendConn
 
-	errMu   sync.Mutex
-	lastErr error // the error that terminated Run, set before runStopped closes
+	stateMu sync.RWMutex
+	stopped bool // guarded by stateMu; ownership transfer stops before drain
+
+	errMu     sync.Mutex
+	lastErr   error // the error that terminated Run, set before runStopped closes
+	closeOnce sync.Once
 }
 
 var _ sender = &sendQueue{}
@@ -57,7 +61,16 @@ func newSendQueue(conn sendConn) sender {
 // Send sends out a packet. It's guaranteed to not block.
 // Callers need to make sure that there's actually space in the send queue by calling WouldBlock.
 // Otherwise Send will panic.
-func (h *sendQueue) Send(p *packetBuffer, gsoSize uint16, ecn protocol.ECN) {
+func (h *sendQueue) Send(p *packetBuffer, gsoSize uint16, ecn protocol.ECN) error {
+	h.stateMu.RLock()
+	defer h.stateMu.RUnlock()
+	if h.stopped {
+		p.Release()
+		if err := h.LastRunError(); err != nil {
+			return err
+		}
+		return errSendQueueStopped
+	}
 	select {
 	case h.queue <- queueEntry{buf: p, gsoSize: gsoSize, ecn: ecn}:
 		// clear available channel if we've reached capacity
@@ -67,7 +80,7 @@ func (h *sendQueue) Send(p *packetBuffer, gsoSize uint16, ecn protocol.ECN) {
 			default:
 			}
 		}
-	case <-h.runStopped:
+		return nil
 	default:
 		panic("sendQueue.Send would have blocked")
 	}
@@ -91,8 +104,21 @@ func (h *sendQueue) LastRunError() error {
 	return h.lastErr
 }
 
-func (h *sendQueue) Run() error {
-	defer close(h.runStopped)
+func (h *sendQueue) Run() (runErr error) {
+	defer func() {
+		if runErr != nil {
+			h.errMu.Lock()
+			h.lastErr = runErr
+			h.errMu.Unlock()
+		}
+		// Exclude Send while transitioning to stopped and draining. Without
+		// this boundary, a send can win after drain and leak its buffer.
+		h.stateMu.Lock()
+		h.stopped = true
+		h.drain()
+		close(h.runStopped)
+		h.stateMu.Unlock()
+	}()
 	var shouldClose bool
 	for {
 		if shouldClose && len(h.queue) == 0 {
@@ -104,19 +130,17 @@ func (h *sendQueue) Run() error {
 			// make sure that all queued packets are actually sent out
 			shouldClose = true
 		case e := <-h.queue:
-			if err := h.conn.Write(e.buf.Data, e.gsoSize, e.ecn); err != nil {
+			err := h.conn.Write(e.buf.Data, e.gsoSize, e.ecn)
+			e.buf.Release()
+			if err != nil {
 				// This additional check enables:
 				// 1. Checking for "datagram too large" message from the kernel, as such,
 				// 2. Path MTU discovery,and
 				// 3. Eventual detection of loss PingFrame.
 				if !isSendMsgSizeErr(err) {
-					h.errMu.Lock()
-					h.lastErr = err
-					h.errMu.Unlock()
 					return err
 				}
 			}
-			e.buf.Release()
 			select {
 			case h.available <- struct{}{}:
 			default:
@@ -125,8 +149,19 @@ func (h *sendQueue) Run() error {
 	}
 }
 
+func (h *sendQueue) drain() {
+	for {
+		select {
+		case e := <-h.queue:
+			e.buf.Release()
+		default:
+			return
+		}
+	}
+}
+
 func (h *sendQueue) Close() {
-	close(h.closeCalled)
+	h.closeOnce.Do(func() { close(h.closeCalled) })
 	// wait until the run loop returned
 	<-h.runStopped
 }

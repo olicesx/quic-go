@@ -28,6 +28,19 @@ func TestParseDatagramFrameWithoutLength(t *testing.T) {
 	require.Equal(t, len(data), l)
 }
 
+func TestParseDatagramFrameLargerThan1200Bytes(t *testing.T) {
+	data := make([]byte, 1300)
+	for i := range data {
+		data[i] = byte(i)
+	}
+	frame, l, err := parseDatagramFrame(data, 0x30, protocol.Version1)
+	require.NoError(t, err)
+	require.Equal(t, data, frame.Data)
+	require.Equal(t, len(data), l)
+	require.Equal(t, protocol.MaxPacketBufferSize, cap(frame.Data))
+	PutDatagramFrame(frame)
+}
+
 func TestParseDatagramFrameErrorsOnLengthLongerThanFrame(t *testing.T) {
 	data := encodeVarInt(0x6) // length
 	data = append(data, []byte("fooba")...)

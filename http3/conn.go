@@ -75,7 +75,7 @@ func newConnection(
 		logger:           logger,
 		idleTimeout:      idleTimeout,
 		enableDatagrams:  enableDatagrams,
-		decoder:          qpack.NewDecoder(func(hf qpack.HeaderField) {}),
+		decoder:          qpack.NewDecoder(),
 		receivedSettings: make(chan struct{}),
 		streams:          make(map[protocol.StreamID]*datagrammer),
 	}
@@ -137,11 +137,7 @@ func (c *connection) decodeTrailers(r io.Reader, l, maxHeaderBytes uint64) (http
 	if _, err := io.ReadFull(r, b); err != nil {
 		return nil, err
 	}
-	fields, err := c.decoder.DecodeFull(b)
-	if err != nil {
-		return nil, err
-	}
-	return parseTrailers(fields)
+	return parseTrailersIncremental(c.decoder.Decode(b), int(maxHeaderBytes))
 }
 
 func (c *connection) acceptStream(ctx context.Context) (quic.Stream, *datagrammer, error) {
@@ -298,22 +294,26 @@ func (c *connection) receiveDatagrams() error {
 		}
 		quarterStreamID, n, err := quicvarint.Parse(b)
 		if err != nil {
+			c.Connection.ReleaseDatagram(b)
 			c.Connection.CloseWithError(quic.ApplicationErrorCode(ErrCodeDatagramError), "")
 			return fmt.Errorf("could not read quarter stream id: %w", err)
 		}
 		if quarterStreamID > maxQuarterStreamID {
+			c.Connection.ReleaseDatagram(b)
 			c.Connection.CloseWithError(quic.ApplicationErrorCode(ErrCodeDatagramError), "")
-			return fmt.Errorf("invalid quarter stream id: %w", err)
+			return fmt.Errorf("invalid quarter stream id: %d", quarterStreamID)
 		}
 		streamID := protocol.StreamID(4 * quarterStreamID)
 		c.streamMx.Lock()
 		dg, ok := c.streams[streamID]
-		if !ok {
-			c.streamMx.Unlock()
-			return nil
-		}
 		c.streamMx.Unlock()
-		dg.enqueue(b[n:])
+		if !ok {
+			c.Connection.ReleaseDatagram(b)
+			continue
+		}
+		payload := append([]byte(nil), b[n:]...)
+		c.Connection.ReleaseDatagram(b)
+		dg.enqueue(payload)
 	}
 }
 

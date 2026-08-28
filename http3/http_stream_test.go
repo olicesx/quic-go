@@ -162,9 +162,9 @@ var _ = Describe("Request Stream", func() {
 			newStream(qstr, newConnection(context.Background(), conn, false, protocol.PerspectiveClient, nil, 0), nil, func(r io.Reader, u uint64) error { return nil }),
 			requestWriter,
 			make(chan struct{}),
-			qpack.NewDecoder(func(qpack.HeaderField) {}),
+			qpack.NewDecoder(),
 			true,
-			math.MaxUint64,
+			uint64(math.MaxInt),
 			&http.Response{},
 			&httptrace.ClientTrace{},
 		)

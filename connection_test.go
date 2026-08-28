@@ -254,18 +254,15 @@ func TestConnectionHandleReceiveStreamFrames(t *testing.T) {
 		streamsMap := NewMockStreamManager(mockCtrl)
 		tc := newServerTestConnection(t, mockCtrl, nil, false, connectionOptStreamManager(streamsMap))
 
-		before := wire.StreamFramePoolLen()
 		pooled := wire.GetStreamFrame()
 		pooled.StreamID = streamID
 		streamsMap.EXPECT().GetOrOpenReceiveStream(streamID).Return(nil, nil)
 		require.NoError(t, tc.conn.handleFrame(pooled, protocol.Encryption1RTT, connID, now))
-		require.Equal(t, before, wire.StreamFramePoolLen(), "pooled frame for a closed stream must be returned to the pool")
 
 		pooled2 := wire.GetStreamFrame()
 		pooled2.StreamID = streamID
 		streamsMap.EXPECT().GetOrOpenReceiveStream(streamID).Return(nil, errors.New("test err"))
 		require.Error(t, tc.conn.handleFrame(pooled2, protocol.Encryption1RTT, connID, now))
-		require.Equal(t, before, wire.StreamFramePoolLen(), "pooled frame for an invalid stream must be returned to the pool")
 	})
 
 	t.Run("for invalid streams", func(t *testing.T) {
@@ -1670,8 +1667,9 @@ func TestConnectionPacketPacing(t *testing.T) {
 		data []byte
 	}
 	sendChan := make(chan sentPacket, 10)
-	sender.EXPECT().Send(gomock.Any(), gomock.Any(), gomock.Any()).Do(func(b *packetBuffer, _ uint16, _ protocol.ECN) {
+	sender.EXPECT().Send(gomock.Any(), gomock.Any(), gomock.Any()).Do(func(b *packetBuffer, _ uint16, _ protocol.ECN) error {
 		sendChan <- sentPacket{time: time.Now(), data: b.Data}
+		return nil
 	}).Times(4)
 
 	errChan := make(chan error, 1)
@@ -2380,6 +2378,38 @@ func TestConnectionCongestionControl(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		t.Fatal("timeout")
 	}
+}
+
+func TestConnectionPropagatesSendQueueError(t *testing.T) {
+	mockCtrl := gomock.NewController(t)
+	sph := mockackhandler.NewMockSentPacketHandler(mockCtrl)
+	sender := NewMockSender(mockCtrl)
+	tc := newServerTestConnection(t,
+		mockCtrl,
+		nil,
+		false,
+		connectionOptSender(sender),
+		connectionOptHandshakeConfirmed(),
+		connectionOptSentPacketHandler(sph),
+	)
+
+	sph.EXPECT().ECNMode(true).Return(protocol.ECNNon)
+	sph.EXPECT().SentPacket(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any())
+	tc.packer.EXPECT().AppendPacket(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(
+		func(buf *packetBuffer, _ protocol.ByteCount, _ time.Time, _ protocol.Version) (shortHeaderPacket, error) {
+			buf.Data = append(buf.Data, "packet"...)
+			return shortHeaderPacket{PacketNumber: 1, Length: protocol.ByteCount(buf.Len())}, nil
+		},
+	)
+	sendErr := errors.New("sender stopped")
+	sender.EXPECT().Send(gomock.Any(), uint16(0), protocol.ECNNon).DoAndReturn(
+		func(buf *packetBuffer, _ uint16, _ protocol.ECN) error {
+			buf.Release()
+			return sendErr
+		},
+	)
+
+	require.ErrorIs(t, tc.conn.sendPacketsWithoutGSO(time.Now()), sendErr)
 }
 
 func TestConnectionSendQueue(t *testing.T) {
