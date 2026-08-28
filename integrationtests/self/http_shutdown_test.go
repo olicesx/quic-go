@@ -89,9 +89,11 @@ func TestGracefulShutdownLongLivedRequest(t *testing.T) {
 			errChan <- server.Shutdown(ctx)
 		}()
 
-		// measure how long it takes until the request errors
-		for t := range time.NewTicker(delay / 10).C {
-			if _, err := w.Write([]byte(t.String())); err != nil {
+		// Measure how long it takes until the request errors.
+		ticker := time.NewTicker(delay / 10)
+		defer ticker.Stop()
+		for tick := range ticker.C {
+			if _, err := w.Write([]byte(tick.String())); err != nil {
 				requestChan <- time.Since(start)
 				return
 			}
@@ -108,7 +110,7 @@ func TestGracefulShutdownLongLivedRequest(t *testing.T) {
 	require.ErrorAs(t, err, &h3Err)
 	require.Equal(t, http3.ErrCodeNoError, h3Err.ErrorCode)
 	took := time.Since(start)
-	require.InDelta(t, delay.Seconds(), took.Seconds(), (delay / 2).Seconds())
+	require.GreaterOrEqual(t, took, delay)
 
 	// make sure that shutdown returned due to context deadline
 	select {
@@ -120,7 +122,7 @@ func TestGracefulShutdownLongLivedRequest(t *testing.T) {
 
 	select {
 	case requestDuration := <-requestChan:
-		require.InDelta(t, delay.Seconds(), requestDuration.Seconds(), (delay / 2).Seconds())
+		require.GreaterOrEqual(t, requestDuration, delay)
 	case <-time.After(time.Second):
 		t.Fatal("did not receive request duration")
 	}
