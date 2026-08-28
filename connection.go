@@ -1982,6 +1982,10 @@ func (s *connection) sendPacketsWithoutGSO(now time.Time) error {
 	}
 }
 
+func maxPacketSizeForGSOBuffer(buf *packetBuffer, maxSize protocol.ByteCount) protocol.ByteCount {
+	return min(maxSize, buf.Cap()-buf.Len())
+}
+
 func (s *connection) sendPacketsWithGSO(now time.Time) error {
 	maxSize := s.maxPacketSize()
 
@@ -1992,9 +1996,10 @@ func (s *connection) sendPacketsWithGSO(now time.Time) error {
 	// kernel splits the payload into segSize chunks, so the final
 	// segment may legitimately be shorter, never longer).
 	//
-	// AppendPacket always uses maxSize and registerPackedShortHeaderPacket
-	// runs immediately, so a later STREAM packet that is larger than the
-	// current DATAGRAM-sized batch cannot be rewritten. If that packet
+	// AppendPacket uses the smaller of maxSize and the remaining batch
+	// capacity, and registerPackedShortHeaderPacket runs immediately, so a
+	// later STREAM packet that is larger than the current DATAGRAM-sized
+	// batch cannot be rewritten. If that packet
 	// stayed in the buffer, UDP_SEGMENT would cut it into a full
 	// segSize chunk plus a leftover that the peer would parse as a
 	// second packet. Peel it onto a fresh buffer as the next batch's
@@ -2017,7 +2022,8 @@ func (s *connection) sendPacketsWithGSO(now time.Time) error {
 		buf := getLargePacketBuffer()
 		for {
 			var dontSendMore bool
-			size, err := s.appendOneShortHeaderPacket(buf, maxSize, ecn, now)
+			packetMaxSize := maxPacketSizeForGSOBuffer(buf, maxSize)
+			size, err := s.appendOneShortHeaderPacket(buf, packetMaxSize, ecn, now)
 			if err != nil {
 				if err != errNothingToPack {
 					return err

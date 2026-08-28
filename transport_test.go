@@ -370,12 +370,6 @@ func TestTransportListening(t *testing.T) {
 		ConnectionIDLength: 5,
 		Tracer:             tracer,
 	}
-	require.NoError(t, tr.init(true))
-	defer func() {
-		mockTracer.EXPECT().Close()
-		tr.Close()
-	}()
-
 	conn := newUPDConnLocalhost(t)
 	data := wire.ComposeVersionNegotiation([]byte{1, 2, 3, 4, 5}, []byte{6, 7, 8, 9, 10}, []protocol.Version{protocol.Version1})
 	dropped := make(chan struct{}, 10)
@@ -384,6 +378,11 @@ func TestTransportListening(t *testing.T) {
 			dropped <- struct{}{}
 		},
 	)
+	require.NoError(t, tr.init(true))
+	defer func() {
+		mockTracer.EXPECT().Close()
+		tr.Close()
+	}()
 
 	_, err := conn.WriteTo(data, tr.Conn.LocalAddr())
 	require.NoError(t, err)

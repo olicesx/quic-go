@@ -2075,6 +2075,12 @@ func TestConnectionGSOBatchPacketSize(t *testing.T) {
 	}
 }
 
+func TestGSOPacketMaxSizeIsBoundedByRemainingCapacity(t *testing.T) {
+	buf := &packetBuffer{Data: make([]byte, 19_114, protocol.MaxLargePacketBufferSize)}
+	require.Equal(t, protocol.ByteCount(1_366), maxPacketSizeForGSOBuffer(buf, protocol.MaxPacketBufferSize))
+	require.Equal(t, protocol.ByteCount(1_200), maxPacketSizeForGSOBuffer(buf, 1_200))
+}
+
 // A later packet larger than the batch's UDP_SEGMENT size (DATAGRAM then
 // STREAM) must be peeled onto a new batch. The kernel never splits a
 // segment longer than segSize; leaving the oversized packet in the buffer
