@@ -378,11 +378,15 @@ func TestTransportListening(t *testing.T) {
 			dropped <- struct{}{}
 		},
 	)
+	lnDropped := make(chan struct{}, 10)
+	mockTracer.EXPECT().DroppedPacket(conn.LocalAddr(), logging.PacketTypeVersionNegotiation, protocol.ByteCount(len(data)), logging.PacketDropUnexpectedPacket).Do(
+		func(net.Addr, logging.PacketType, protocol.ByteCount, logging.PacketDropReason) {
+			lnDropped <- struct{}{}
+		},
+	)
+	mockTracer.EXPECT().Close()
 	require.NoError(t, tr.init(true))
-	defer func() {
-		mockTracer.EXPECT().Close()
-		tr.Close()
-	}()
+	defer tr.Close()
 
 	_, err := conn.WriteTo(data, tr.Conn.LocalAddr())
 	require.NoError(t, err)
@@ -396,13 +400,6 @@ func TestTransportListening(t *testing.T) {
 	require.NoError(t, err)
 
 	// send the packet again
-	lnDropped := make(chan struct{}, 10)
-	mockTracer.EXPECT().DroppedPacket(conn.LocalAddr(), logging.PacketTypeVersionNegotiation, protocol.ByteCount(len(data)), logging.PacketDropUnexpectedPacket).Do(
-		func(net.Addr, logging.PacketType, protocol.ByteCount, logging.PacketDropReason) {
-			lnDropped <- struct{}{}
-		},
-	)
-
 	_, err = conn.WriteTo(data, tr.Conn.LocalAddr())
 	require.NoError(t, err)
 	select {
