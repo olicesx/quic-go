@@ -234,11 +234,17 @@ func (s *requestStream) ReadResponse() (*http.Response, error) {
 	res := s.response
 	err = updateResponseFromHeadersIncremental(res, s.decoder.Decode(headerBlock), int(s.maxHeaderBytes))
 	if err != nil {
-		errCode := ErrCodeMessageError
 		var qpackErr *qpackError
 		if errors.As(err, &qpackErr) {
-			errCode = ErrCodeQPACKDecompressionFailed
-		} else if errors.Is(err, errHeaderTooLarge) {
+			// RFC 9204 §§2.2.3, 3.1, 4.5.1: invalid static index, illegal
+			// Required Insert Count, and invalid dynamic refs are connection
+			// errors of QPACK_DECOMPRESSION_FAILED. §7.4 allows a stream
+			// error only for values too large to decode.
+			s.conn.CloseWithError(quic.ApplicationErrorCode(ErrCodeQPACKDecompressionFailed), err.Error())
+			return nil, fmt.Errorf("http3: invalid response: %w", err)
+		}
+		errCode := ErrCodeMessageError
+		if errors.Is(err, errHeaderTooLarge) {
 			errCode = ErrCodeExcessiveLoad
 		}
 		s.Stream.CancelRead(quic.StreamErrorCode(errCode))

@@ -631,8 +631,8 @@ func (s *Server) handleRequest(conn *connection, str quic.Stream, datagrams *dat
 		errCode := ErrCodeMessageError
 		var qpackErr *qpackError
 		if errors.As(err, &qpackErr) {
-			// RFC 9204, Section 4.2: field-section decoding failures are
-			// connection errors, since QPACK state is connection-scoped.
+			// RFC 9204 §§2.2.3, 3.1, 4.5.1: field-section decoding failures
+			// such as an invalid static index are connection errors.
 			conn.CloseWithError(quic.ApplicationErrorCode(ErrCodeQPACKDecompressionFailed), err.Error())
 			return
 		} else if errors.Is(err, errHeaderTooLarge) {
