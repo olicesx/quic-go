@@ -7,7 +7,7 @@ import (
 
 	mockquic "github.com/olicesx/quic-go/internal/mocks/quic"
 
-	"github.com/quic-go/qpack"
+	"github.com/olicesx/qpack"
 	"go.uber.org/mock/gomock"
 
 	. "github.com/onsi/ginkgo/v2"

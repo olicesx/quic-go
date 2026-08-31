@@ -4,10 +4,10 @@ go 1.24
 
 require (
 	github.com/francoispqt/gojay v1.2.13
+	github.com/olicesx/qpack v0.0.0-20260831031549-0844ed36f1cd
 	github.com/onsi/ginkgo/v2 v2.9.5
 	github.com/onsi/gomega v1.27.6
 	github.com/prometheus/client_golang v1.19.1
-	github.com/quic-go/qpack v0.6.0
 	github.com/stretchr/testify v1.9.0
 	go.uber.org/mock v0.5.0
 	golang.org/x/crypto v0.26.0

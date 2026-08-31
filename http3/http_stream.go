@@ -11,7 +11,7 @@ import (
 	"github.com/olicesx/quic-go"
 	"github.com/olicesx/quic-go/internal/protocol"
 
-	"github.com/quic-go/qpack"
+	"github.com/olicesx/qpack"
 )
 
 // A Stream is an HTTP/3 request stream.
@@ -86,14 +86,15 @@ func (s *stream) Read(b []byte) (int, error) {
 				s.bytesRemainingInFrame = f.Length
 				break parseLoop
 			case *headersFrame:
-				if s.conn.perspective == protocol.PerspectiveServer {
-					continue
-				}
 				if s.parsedTrailer {
 					return 0, errors.New("additional HEADERS frame received after trailers")
 				}
 				s.parsedTrailer = true
-				return 0, s.parseTrailer(s.Stream, f.Length)
+				err := s.parseTrailer(s.Stream, f.Length)
+				if err != nil {
+					handleQPACKError(s.conn, s.Stream, err)
+				}
+				return 0, err
 			default:
 				s.conn.CloseWithError(quic.ApplicationErrorCode(ErrCodeFrameUnexpected), "")
 				// parseNextFrame skips over unknown frame types
@@ -234,13 +235,7 @@ func (s *requestStream) ReadResponse() (*http.Response, error) {
 	res := s.response
 	err = updateResponseFromHeadersIncremental(res, s.decoder.Decode(headerBlock), int(s.maxHeaderBytes))
 	if err != nil {
-		var qpackErr *qpackError
-		if errors.As(err, &qpackErr) {
-			// RFC 9204 §§2.2.3, 3.1, 4.5.1: invalid static index, illegal
-			// Required Insert Count, and invalid dynamic refs are connection
-			// errors of QPACK_DECOMPRESSION_FAILED. §7.4 allows a stream
-			// error only for values too large to decode.
-			s.conn.CloseWithError(quic.ApplicationErrorCode(ErrCodeQPACKDecompressionFailed), err.Error())
+		if handleQPACKError(s.conn, s.Stream, err) {
 			return nil, fmt.Errorf("http3: invalid response: %w", err)
 		}
 		errCode := ErrCodeMessageError

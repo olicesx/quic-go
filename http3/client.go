@@ -15,7 +15,7 @@ import (
 	"github.com/olicesx/quic-go/internal/protocol"
 	"github.com/olicesx/quic-go/quicvarint"
 
-	"github.com/quic-go/qpack"
+	"github.com/olicesx/qpack"
 )
 
 const (

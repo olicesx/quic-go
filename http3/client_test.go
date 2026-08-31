@@ -16,7 +16,7 @@ import (
 	mockquic "github.com/olicesx/quic-go/internal/mocks/quic"
 	"github.com/olicesx/quic-go/quicvarint"
 
-	"github.com/quic-go/qpack"
+	"github.com/olicesx/qpack"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -615,7 +615,7 @@ var _ = Describe("Client", func() {
 			Expect(rsp.Request).ToNot(BeNil())
 		})
 
-		It("errors on invalid HEADERS frames", func() {
+		It("closes the connection on invalid trailer QPACK", func() {
 			rspBuf := bytes.NewBuffer(encodeResponse(418))
 
 			b := (&headersFrame{Length: 10}).Append(nil)
@@ -630,6 +630,10 @@ var _ = Describe("Client", func() {
 			str.EXPECT().Write(gomock.Any()).AnyTimes().DoAndReturn(func(p []byte) (int, error) { return len(p), nil })
 			str.EXPECT().Close()
 			str.EXPECT().Read(gomock.Any()).DoAndReturn(rspBuf.Read).AnyTimes()
+			conn.EXPECT().CloseWithError(
+				quic.ApplicationErrorCode(ErrCodeQPACKDecompressionFailed),
+				gomock.Any(),
+			).Return(nil)
 			tr := &Transport{}
 			cc := tr.NewClientConn(conn)
 			rsp, err := cc.RoundTrip(req)

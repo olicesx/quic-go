@@ -20,7 +20,7 @@ import (
 	"github.com/olicesx/quic-go/internal/protocol"
 	"github.com/olicesx/quic-go/quicvarint"
 
-	"github.com/quic-go/qpack"
+	"github.com/olicesx/qpack"
 )
 
 // allows mocking of quic.Listen and quic.ListenAddr
@@ -629,11 +629,7 @@ func (s *Server) handleRequest(conn *connection, str quic.Stream, datagrams *dat
 	req, err := requestFromHeadersIncremental(decoder.Decode(headerBlock), int(s.maxHeaderBytes()))
 	if err != nil {
 		errCode := ErrCodeMessageError
-		var qpackErr *qpackError
-		if errors.As(err, &qpackErr) {
-			// RFC 9204 §§2.2.3, 3.1, 4.5.1: field-section decoding failures
-			// such as an invalid static index are connection errors.
-			conn.CloseWithError(quic.ApplicationErrorCode(ErrCodeQPACKDecompressionFailed), err.Error())
+		if handleQPACKError(conn, str, err) {
 			return
 		} else if errors.Is(err, errHeaderTooLarge) {
 			errCode = ErrCodeExcessiveLoad
@@ -653,7 +649,13 @@ func (s *Server) handleRequest(conn *connection, str quic.Stream, datagrams *dat
 	if _, ok := req.Header["Content-Length"]; ok && req.ContentLength >= 0 {
 		contentLength = req.ContentLength
 	}
-	hstr := newStream(str, conn, datagrams, nil)
+	hstr := newStream(str, conn, datagrams, func(r io.Reader, l uint64) error {
+		trailers, err := conn.decodeTrailers(r, l, s.maxHeaderBytes())
+		if err == nil {
+			req.Trailer = trailers
+		}
+		return err
+	})
 	body := newRequestBody(hstr, contentLength, conn.Context(), conn.ReceivedSettings(), conn.Settings)
 	req.Body = body
 

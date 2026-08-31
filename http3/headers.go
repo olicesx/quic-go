@@ -13,13 +13,29 @@ import (
 
 	"golang.org/x/net/http/httpguts"
 
-	"github.com/quic-go/qpack"
+	"github.com/olicesx/qpack"
+	"github.com/olicesx/quic-go"
 )
 
 type qpackError struct{ err error }
 
 func (e *qpackError) Error() string { return fmt.Sprintf("qpack: %v", e.err) }
 func (e *qpackError) Unwrap() error { return e.err }
+
+func handleQPACKError(conn *connection, str quic.Stream, err error) bool {
+	var qpackErr *qpackError
+	if !errors.As(err, &qpackErr) {
+		return false
+	}
+	var decoderErr *qpack.DecoderError
+	if errors.As(qpackErr, &decoderErr) && decoderErr.Kind == qpack.DecoderErrorValueTooLarge {
+		str.CancelRead(quic.StreamErrorCode(ErrCodeQPACKDecompressionFailed))
+		str.CancelWrite(quic.StreamErrorCode(ErrCodeQPACKDecompressionFailed))
+		return true
+	}
+	conn.CloseWithError(quic.ApplicationErrorCode(ErrCodeQPACKDecompressionFailed), err.Error())
+	return true
+}
 
 var errHeaderTooLarge = errors.New("http3: headers too large")
 

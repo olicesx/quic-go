@@ -8,9 +8,9 @@ import (
 	"net/url"
 	"testing"
 
+	"github.com/olicesx/qpack"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
-	"github.com/quic-go/qpack"
 	"github.com/stretchr/testify/require"
 )
 

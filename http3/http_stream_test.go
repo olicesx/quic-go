@@ -13,7 +13,7 @@ import (
 	"github.com/olicesx/quic-go/internal/protocol"
 	"github.com/olicesx/quic-go/internal/qerr"
 
-	"github.com/quic-go/qpack"
+	"github.com/olicesx/qpack"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -104,6 +104,28 @@ var _ = Describe("Stream", func() {
 			Expect(err).ToNot(HaveOccurred())
 			Expect(n).To(Equal(3))
 			Expect(b[:n]).To(Equal([]byte("bar")))
+		})
+
+		It("keeps the connection open when a trailer QPACK value is too large", func() {
+			fieldSection := []byte{0xff, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80}
+			buf.Write((&headersFrame{Length: uint64(len(fieldSection))}).Append(nil))
+			buf.Write(fieldSection)
+			str.parseTrailer = func(r io.Reader, l uint64) error {
+				b := make([]byte, l)
+				_, readErr := io.ReadFull(r, b)
+				if readErr != nil {
+					return readErr
+				}
+				_, decodeErr := qpack.NewDecoder().Decode(b)()
+				return &qpackError{err: decodeErr}
+			}
+			qstr.EXPECT().CancelRead(quic.StreamErrorCode(ErrCodeQPACKDecompressionFailed))
+			qstr.EXPECT().CancelWrite(quic.StreamErrorCode(ErrCodeQPACKDecompressionFailed))
+
+			_, err := str.Read([]byte{0})
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("varint integer overflow"))
+			Expect(errorCbCalled).To(BeFalse())
 		})
 
 		It("errors when it can't parse the frame", func() {
@@ -211,8 +233,9 @@ var _ = Describe("Request Stream", func() {
 		qstr.EXPECT().Write(gomock.Any()).AnyTimes()
 		Expect(str.SendRequestHeader(req)).To(Succeed())
 
-		b := (&headersFrame{Length: 1}).Append(nil)
-		buf := bytes.NewBuffer(append(b, 0xff)) // truncated QPACK field-section prefix
+		fieldSection := []byte{0, 0, 0xff, 0xd1, 0x4d} // indexed static field with index 10000
+		b := (&headersFrame{Length: uint64(len(fieldSection))}).Append(nil)
+		buf := bytes.NewBuffer(append(b, fieldSection...))
 		qstr.EXPECT().Read(gomock.Any()).DoAndReturn(buf.Read).AnyTimes()
 		conn.EXPECT().CloseWithError(
 			quic.ApplicationErrorCode(ErrCodeQPACKDecompressionFailed),
@@ -222,5 +245,23 @@ var _ = Describe("Request Stream", func() {
 		_, err = str.ReadResponse()
 		Expect(err).To(HaveOccurred())
 		Expect(err.Error()).To(ContainSubstring("qpack"))
+	})
+
+	It("cancels only the stream when a QPACK value is too large", func() {
+		req, err := http.NewRequest(http.MethodGet, "https://quic-go.net", nil)
+		Expect(err).ToNot(HaveOccurred())
+		qstr.EXPECT().Write(gomock.Any()).AnyTimes()
+		Expect(str.SendRequestHeader(req)).To(Succeed())
+
+		fieldSection := []byte{0xff, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80}
+		b := (&headersFrame{Length: uint64(len(fieldSection))}).Append(nil)
+		buf := bytes.NewBuffer(append(b, fieldSection...))
+		qstr.EXPECT().Read(gomock.Any()).DoAndReturn(buf.Read).AnyTimes()
+		qstr.EXPECT().CancelRead(quic.StreamErrorCode(ErrCodeQPACKDecompressionFailed))
+		qstr.EXPECT().CancelWrite(quic.StreamErrorCode(ErrCodeQPACKDecompressionFailed))
+
+		_, err = str.ReadResponse()
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("varint integer overflow"))
 	})
 })

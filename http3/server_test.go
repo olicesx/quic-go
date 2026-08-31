@@ -19,7 +19,7 @@ import (
 	"github.com/olicesx/quic-go/internal/testdata"
 	"github.com/olicesx/quic-go/quicvarint"
 
-	"github.com/quic-go/qpack"
+	"github.com/olicesx/qpack"
 	"go.uber.org/mock/gomock"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -171,6 +171,57 @@ var _ = Describe("Server", func() {
 			Eventually(requestChan).Should(Receive(&req))
 			Expect(req.Host).To(Equal("www.example.com"))
 			Expect(req.RemoteAddr).To(Equal("127.0.0.1:1337"))
+		})
+
+		It("decodes request trailers", func() {
+			type result struct {
+				body    string
+				trailer string
+				err     error
+			}
+			resultChan := make(chan result, 1)
+			s.Handler = http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+				body, err := io.ReadAll(r.Body)
+				resultChan <- result{body: string(body), trailer: r.Trailer.Get("x-test-trailer"), err: err}
+			})
+
+			requestData := encodeRequest(examplePostRequest)
+			requestData = append(requestData, getDataFrame([]byte("foobar"))...)
+			trailerBuf := &bytes.Buffer{}
+			encoder := qpack.NewEncoder(trailerBuf)
+			Expect(encoder.WriteField(qpack.HeaderField{Name: "x-test-trailer", Value: "present"})).To(Succeed())
+			Expect(encoder.Close()).To(Succeed())
+			requestData = append(requestData, (&headersFrame{Length: uint64(trailerBuf.Len())}).Append(nil)...)
+			requestData = append(requestData, trailerBuf.Bytes()...)
+			setRequest(requestData)
+			str.EXPECT().Write(gomock.Any()).DoAndReturn(func(p []byte) (int, error) { return len(p), nil }).AnyTimes()
+			str.EXPECT().CancelRead(quic.StreamErrorCode(ErrCodeNoError))
+			str.EXPECT().Close()
+
+			s.handleRequest(conn, str, nil, qpackDecoder)
+			Eventually(resultChan).Should(Receive(Equal(result{body: "foobar", trailer: "present"})))
+		})
+
+		It("keeps the connection open when a request trailer QPACK value is too large", func() {
+			errChan := make(chan error, 1)
+			s.Handler = http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+				_, err := io.ReadAll(r.Body)
+				errChan <- err
+			})
+
+			requestData := encodeRequest(exampleGetRequest)
+			fieldSection := []byte{0xff, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80}
+			requestData = append(requestData, (&headersFrame{Length: uint64(len(fieldSection))}).Append(nil)...)
+			requestData = append(requestData, fieldSection...)
+			setRequest(requestData)
+			str.EXPECT().CancelRead(quic.StreamErrorCode(ErrCodeQPACKDecompressionFailed))
+			str.EXPECT().CancelWrite(quic.StreamErrorCode(ErrCodeQPACKDecompressionFailed))
+			str.EXPECT().Write(gomock.Any()).DoAndReturn(func(p []byte) (int, error) { return len(p), nil }).AnyTimes()
+			str.EXPECT().CancelRead(quic.StreamErrorCode(ErrCodeNoError))
+			str.EXPECT().Close()
+
+			s.handleRequest(conn, str, nil, qpackDecoder)
+			Eventually(errChan).Should(Receive(MatchError(ContainSubstring("varint integer overflow"))))
 		})
 
 		It("returns 200 with an empty handler", func() {
@@ -696,6 +747,20 @@ var _ = Describe("Server", func() {
 				).Do(func(quic.ApplicationErrorCode, string) error {
 					close(done)
 					return nil
+				})
+
+				s.handleConn(conn)
+				Eventually(done).Should(BeClosed())
+			})
+
+			It("cancels only the stream when a QPACK value is too large", func() {
+				fieldSection := []byte{0xff, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80}
+				b := (&headersFrame{Length: uint64(len(fieldSection))}).Append(nil)
+				setRequest(append(b, fieldSection...))
+				done := make(chan struct{})
+				str.EXPECT().CancelRead(quic.StreamErrorCode(ErrCodeQPACKDecompressionFailed))
+				str.EXPECT().CancelWrite(quic.StreamErrorCode(ErrCodeQPACKDecompressionFailed)).Do(func(quic.StreamErrorCode) {
+					close(done)
 				})
 
 				s.handleConn(conn)
