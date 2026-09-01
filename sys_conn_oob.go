@@ -67,6 +67,9 @@ func isECNDisabledUsingEnv() bool {
 type oobConn struct {
 	OOBCapablePacketConn
 	batchConn batchConn
+	// batchConnMu guards batchConn against useAddrParsing swaps racing with
+	// the read loop's per-batch reader pick.
+	batchConnMu sync.Mutex
 	// skipAddr, when non-nil, is the raw recvmmsg reader whose messages
 	// carry no source address. It starts as the active batchConn for
 	// client (dial-only) use; useAddrParsing switches the batchConn to
@@ -77,6 +80,10 @@ type oobConn struct {
 	// Packets received from the kernel, but not yet returned by ReadPacket().
 	messages []ipv4.Message
 	buffers  [batchSize]*packetBuffer
+
+	// groQueue holds packets split from a GRO-coalesced datagram that have
+	// not yet been returned by ReadPacket().
+	groQueue []receivedPacket
 
 	cap connCapabilities
 }
@@ -93,9 +100,11 @@ func enableAddrParsing(conn rawConn) {
 }
 
 // useAddrParsing swaps the batch reader to one that parses the per-datagram
-// source address (x/net's). It is idempotent and must be called before any
-// server-side packet handling starts (i.e. from Listen).
+// source address (x/net's). It is idempotent and safe to call after init has
+// already started the read loop: the swap is guarded by batchConnMu.
 func (c *oobConn) useAddrParsing() {
+	c.batchConnMu.Lock()
+	defer c.batchConnMu.Unlock()
 	if c.skipAddr != nil {
 		c.batchConn = ipv4.NewPacketConn(c.OOBCapablePacketConn)
 		c.skipAddr = nil
@@ -173,6 +182,7 @@ func newConn(c OOBCapablePacketConn, supportsDF bool) (*oobConn, error) {
 		cap: connCapabilities{
 			DF:  supportsDF,
 			GSO: isGSOEnabled(rawConn),
+			GRO: isGROEnabled(rawConn),
 			ECN: isECNEnabled(),
 		},
 	}
@@ -186,18 +196,35 @@ func newConn(c OOBCapablePacketConn, supportsDF bool) (*oobConn, error) {
 var invalidCmsgOnceV4, invalidCmsgOnceV6 sync.Once
 
 func (c *oobConn) ReadPacket() (receivedPacket, error) {
+	if len(c.groQueue) > 0 {
+		p := c.groQueue[0]
+		c.groQueue[0] = receivedPacket{}
+		c.groQueue = c.groQueue[1:]
+		return p, nil
+	}
 	if len(c.messages) == int(c.readPos) { // all messages read. Read the next batch of messages.
 		c.messages = c.messages[:batchSize]
 		// replace buffers data buffers up to the packet that has been consumed during the last ReadBatch call
 		for i := uint8(0); i < c.readPos; i++ {
-			buffer := getPacketBuffer()
-			buffer.Data = buffer.Data[:protocol.MaxPacketBufferSize]
+			var buffer *packetBuffer
+			if c.capabilities().GRO {
+				// With GRO the kernel may deliver datagrams coalesced up to
+				// 64KB; a MaxPacketBufferSize buffer would truncate them.
+				buffer = getGroPacketBuffer()
+				buffer.Data = buffer.Data[:protocol.MaxGroPacketBufferSize]
+			} else {
+				buffer = getPacketBuffer()
+				buffer.Data = buffer.Data[:protocol.MaxPacketBufferSize]
+			}
 			c.buffers[i] = buffer
 			c.messages[i].Buffers[0] = c.buffers[i].Data
 		}
 		c.readPos = 0
 
-		n, err := c.batchConn.ReadBatch(c.messages, 0)
+		c.batchConnMu.Lock()
+		bc := c.batchConn
+		c.batchConnMu.Unlock()
+		n, err := bc.ReadBatch(c.messages, 0)
 		if n == 0 || err != nil {
 			return receivedPacket{}, err
 		}
@@ -215,10 +242,21 @@ func (c *oobConn) ReadPacket() (receivedPacket, error) {
 		data:       msg.Buffers[0][:msg.N],
 		buffer:     buffer,
 	}
+	var groSize int
 	for len(data) > 0 {
 		hdr, body, remainder, err := unix.ParseOneSocketControlMessage(data)
 		if err != nil {
 			return receivedPacket{}, err
+		}
+		if hdr.Level == unix.IPPROTO_UDP {
+			switch hdr.Type {
+			case unix.UDP_GRO:
+				// The payload is a native-endian uint16 carrying the
+				// segment size the kernel coalesced this datagram from.
+				if len(body) >= 2 {
+					groSize = int(binary.NativeEndian.Uint16(body))
+				}
+			}
 		}
 		if hdr.Level == unix.IPPROTO_IP {
 			switch hdr.Type {
@@ -259,6 +297,30 @@ func (c *oobConn) ReadPacket() (receivedPacket, error) {
 		}
 		data = remainder
 	}
+	if groSize > 0 && groSize < len(p.data) {
+		// The kernel coalesced multiple datagrams into this message. Split it
+		// back into per-datagram QUIC packets. Segments beyond the first copy
+		// only their payload, but each copy owns a MaxGroPacketBufferSize-capacity
+		// buffer. This avoids shared-buffer refcounting at the cost of retaining
+		// up to 64 KiB per queued segment.
+		n := (len(p.data) + groSize - 1) / groSize
+		for i := n - 1; i >= 1; i-- {
+			start := i * groSize
+			end := min(start+groSize, len(p.data))
+			nb := getGroPacketBuffer()
+			nb.Data = nb.Data[:end-start]
+			copy(nb.Data, p.data[start:end])
+			c.groQueue = append(c.groQueue, receivedPacket{
+				remoteAddr: p.remoteAddr,
+				rcvTime:    p.rcvTime,
+				data:       nb.Data,
+				buffer:     nb,
+				ecn:        p.ecn,
+				info:       p.info,
+			})
+		}
+		p.data = p.data[:groSize]
+	}
 	return p, nil
 }
 
@@ -277,19 +339,24 @@ func (c *oobConn) WritePacket(b []byte, addr net.Addr, packetInfoOOB []byte, gso
 			oob = appendUDPSegmentSizeMsg(oob, gsoSize)
 		}
 	}
+	// With the skipAddr reader the per-datagram source address is nil; a reply
+	// to such a packet (e.g. a stateless reset for an unknown connection)
+	// cannot be routed, so drop it instead of panicking on the type assert.
+	udpAddr, ok := addr.(*net.UDPAddr)
+	if !ok || udpAddr == nil {
+		return 0, nil
+	}
 	if ecn != protocol.ECNUnsupported {
 		if !c.capabilities().ECN {
 			panic("tried to send an ECN-marked packet although ECN is disabled")
 		}
-		if remoteUDPAddr, ok := addr.(*net.UDPAddr); ok {
-			if remoteUDPAddr.IP.To4() != nil {
-				oob = appendIPv4ECNMsg(oob, ecn)
-			} else {
-				oob = appendIPv6ECNMsg(oob, ecn)
-			}
+		if udpAddr.IP.To4() != nil {
+			oob = appendIPv4ECNMsg(oob, ecn)
+		} else {
+			oob = appendIPv6ECNMsg(oob, ecn)
 		}
 	}
-	n, _, err := c.OOBCapablePacketConn.WriteMsgUDP(b, oob, addr.(*net.UDPAddr))
+	n, _, err := c.OOBCapablePacketConn.WriteMsgUDP(b, oob, udpAddr)
 	return n, err
 }
 

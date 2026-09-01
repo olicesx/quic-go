@@ -289,7 +289,11 @@ func (c *mockBatchConn) ReadBatch(ms []ipv4.Message, _ int) (int, error) {
 	require.Len(c.t, ms, batchSize)
 	for i := 0; i < c.numMsgRead; i++ {
 		require.Len(c.t, ms[i].Buffers, 1)
-		require.Len(c.t, ms[i].Buffers[0], protocol.MaxPacketBufferSize)
+		require.Contains(c.t,
+			[]int{protocol.MaxPacketBufferSize, protocol.MaxGroPacketBufferSize},
+			len(ms[i].Buffers[0]),
+			"receive buffer must be sized for either the regular or the GRO path",
+		)
 		data := []byte(fmt.Sprintf("message %d", c.callCounter*c.numMsgRead+i))
 		ms[i].Buffers[0] = data
 		ms[i].N = len(data)

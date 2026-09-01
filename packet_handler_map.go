@@ -18,6 +18,10 @@ type connCapabilities struct {
 	GSO bool
 	// ECN (Explicit Congestion Notifications) supported
 	ECN bool
+	// GRO (Generic Receive Offload) receive coalescing enabled on the socket.
+	// Received datagrams may then carry multiple QUIC packets plus a UDP_GRO
+	// cmsg with the segment size, which ReadPacket splits apart.
+	GRO bool
 }
 
 // rawConn is a connection that allow reading of a receivedPackeh.

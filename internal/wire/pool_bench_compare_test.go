@@ -8,17 +8,18 @@ import (
 	"github.com/olicesx/quic-go/internal/protocol"
 )
 
-// Benchmarks comparing the bounded channel pool with sync.Pool under the
-// workloads that matter for a network proxy:
-//   - steady: hot-path Get/Put, pool at working size
-//   - withGC: periodic GC cycles interleaved (sync.Pool is cleared on every
-//     GC cycle, so every Get after a GC is a fresh 1452B allocation)
+// Benchmarks comparing the bounded channel pool with sync.Pool under two
+// synthetic workloads:
+//   - steady: hot-path Get/Put with a warm pool
+//   - withGC: periodic forced GC cycles while the pool remains active
 //
-// Results on WSL2, go1.26.0:
-//   steady: both allocation-free; channel pool ~2x faster (no interface
-//     boxing, no per-P pinning bookkeeping)
-//   withGC: sync.Pool re-allocates 1452B after every GC cycle; the channel
-//     pool retains its buffers and stays at 0 allocs/op.
+// On Go 1.26, both pools are allocation-free in the steady benchmark, while
+// sync.Pool is faster, especially with parallel callers. During GC, sync.Pool
+// moves current entries to a victim generation and may discard entries that
+// remain unused through a later cycle; it is not cleared unconditionally on
+// every GC. The forced-GC timings are dominated by runtime.GC and should be
+// read primarily for allocation behavior. They also exclude the channel
+// pool's eager warm-up cost and do not model end-to-end natural-GC latency.
 
 type benchSyncPool struct {
 	p sync.Pool
@@ -70,15 +71,16 @@ func BenchmarkPoolWithGCSyncPool(b *testing.B) {
 	benchPoolGetPut(b, p.get, p.put, 64)
 }
 
-// BenchmarkPoolGCChurnChannel models the production receive path under GC
-// pressure: get a frame (packet arrived), release it, and every few packets
-// the GC runs twice (clearing sync.Pool's primary and victim generations).
+// BenchmarkPoolGCChurnChannel repeatedly gets and releases a frame, with two
+// back-to-back GC cycles every few operations. With no intervening Put, those
+// cycles rotate and then discard sync.Pool's current and victim entries.
 func BenchmarkPoolGCChurnChannel(b *testing.B) {
 	benchPoolGCChurn(b, GetStreamFrame, func(f *StreamFrame) { f.PutBack() })
 }
 
-// BenchmarkPoolGCChurnSyncPool is the same workload on a sync.Pool: after the
-// double GC the pool is empty and the next Get allocates a fresh 1452B buffer.
+// BenchmarkPoolGCChurnSyncPool is the same workload on a sync.Pool. After the
+// back-to-back GC cycles discard an idle entry, the next Get allocates a new
+// frame and MaxPacketBufferSize buffer.
 func BenchmarkPoolGCChurnSyncPool(b *testing.B) {
 	p := newBenchSyncPool()
 	benchPoolGCChurn(b, p.get, p.put)

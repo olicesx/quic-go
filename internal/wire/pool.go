@@ -8,10 +8,11 @@ import (
 // reuse. 1024 x 1200B = ~1.2MB worst-case steady-state retention.
 const maxDatagramFramePoolLen = 1024
 
-// datagramFramePool recycles DATAGRAM frames with the same bounded channel
-// pattern as streamFramePool: sync.Pool is cleared on every GC cycle, which
-// under GC pressure leaves the pool permanently empty and turns every frame
-// into a fresh allocation, driving the GC harder.
+// datagramFramePool uses a bounded channel to retain a fixed working set
+// across GC cycles. sync.Pool favors low-contention steady-state reuse, but it
+// may discard entries that remain unused across successive GC cycles. The
+// channel trades synchronization and eager warm-up memory for deterministic
+// retention up to its capacity.
 var datagramFramePool = newDatagramFramePool()
 
 type datagramFramePoolT struct {
@@ -57,12 +58,12 @@ func (p *datagramFramePoolT) Put(f *DatagramFrame) {
 // allocation that feeds the GC loop. 1024 x 1452B = ~1.5MB steady state.
 const maxStreamFramePoolLen = 1024
 
-// streamFramePool recycles STREAM frames. A bounded channel pool is used
-// instead of sync.Pool: sync.Pool is cleared on every GC cycle, and under GC
-// pressure the pool stays empty so every frame re-allocates its
-// MaxPacketBufferSize buffer, which drives the GC harder (allocation spiral).
-// A channel pool is allocation-free on the hot path, survives GC, and is
-// capped so a burst cannot pin unbounded memory.
+// streamFramePool uses a bounded channel to retain frames across GC cycles.
+// sync.Pool is faster in steady-state and parallel microbenchmarks, but an
+// idle pool can lose its current and victim entries over successive GC cycles
+// and allocate again on the next burst. Within its capacity and after warm-up,
+// the channel avoids those cold-burst allocations, but it pays synchronization
+// and warm-up costs and drops returned frames above the capacity limit.
 var streamFramePool = newStreamFramePool()
 
 type streamFramePoolT struct {

@@ -80,6 +80,27 @@ func isGSOEnabled(conn syscall.RawConn) bool {
 	return serr == nil
 }
 
+// isGROEnabled enables kernel-side UDP GRO receive coalescing on the socket
+// and reports whether the option stuck. Coalesced datagrams arrive with a
+// UDP_GRO cmsg carrying the segment size; oobConn.ReadPacket splits them back
+// into individual QUIC packets. Set QUIC_GO_DISABLE_GRO=1 to opt out.
+func isGROEnabled(conn syscall.RawConn) bool {
+	if kernelVersionMajor < 5 {
+		return false
+	}
+	disabled, err := strconv.ParseBool(os.Getenv("QUIC_GO_DISABLE_GRO"))
+	if err == nil && disabled {
+		return false
+	}
+	var serr error
+	if err := conn.Control(func(fd uintptr) {
+		serr = unix.SetsockoptInt(int(fd), unix.IPPROTO_UDP, unix.UDP_GRO, 1)
+	}); err != nil {
+		return false
+	}
+	return serr == nil
+}
+
 func appendUDPSegmentSizeMsg(b []byte, size uint16) []byte {
 	startLen := len(b)
 	const dataLen = 2 // payload is a uint16

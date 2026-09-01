@@ -100,5 +100,9 @@ func setupTransport(c net.PacketConn, tlsConf *tls.Config, createdPacketConn boo
 		Conn:        c,
 		createdConn: createdPacketConn,
 		isSingleUse: true,
+		// Package-level dials are inherently client (dial-only) transports:
+		// use the allocation-free recvmmsg reader that skips per-datagram
+		// source-address parsing.
+		skipAddrParsing: true,
 	}, nil
 }

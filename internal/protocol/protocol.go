@@ -113,6 +113,11 @@ const MaxPacketBufferSize = 1452
 // MaxLargePacketBufferSize is used when using GSO
 const MaxLargePacketBufferSize = 20 * 1024
 
+// MaxGroPacketBufferSize is the receive buffer size used when UDP GRO is
+// enabled: the kernel may coalesce up to 64KB of same-size datagrams into a
+// single receive, and a short buffer would truncate and drop those datagrams.
+const MaxGroPacketBufferSize = 64 * 1024
+
 // MinInitialPacketSize is the minimum size an Initial packet is required to have.
 const MinInitialPacketSize = 1200
 

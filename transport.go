@@ -151,11 +151,17 @@ type Transport struct {
 	closeErr    error
 	createdConn bool
 	isSingleUse bool // was created for a single server or client, i.e. by calling quic.Listen or quic.Dial
-	// serverMode is set by createServer before init runs. Server-side packet
-	// handling consumes the per-datagram source address, so only server
-	// transports swap the reader to the address-parsing one; client
-	// (dial-only) transports keep the allocation-free skipAddr reader.
-	serverMode bool
+	// skipAddrParsing marks transports constructed by the package-level dial
+	// functions; see DisableAddrParsing for the semantics.
+	skipAddrParsing bool
+
+	// DisableAddrParsing opts a dial-only (client) Transport out of
+	// per-datagram source-address parsing on the receive path. The parsed
+	// address is only consumed by server-side Listen handling and by
+	// ReadNonQUICPacket; dial-only transports may skip it to avoid two
+	// allocations per received datagram. It has no effect on transports
+	// created by the package-level Dial functions, which always skip.
+	DisableAddrParsing bool
 
 	readingNonQUICPackets atomic.Bool
 	nonQUICPackets        chan receivedPacket
@@ -202,7 +208,6 @@ func (t *Transport) createServer(tlsConf *tls.Config, conf *Config, allow0RTT bo
 	if t.server != nil {
 		return nil, errListenerAlreadySet
 	}
-	t.serverMode = true
 	conf = populateConfig(conf)
 	if err := t.init(false); err != nil {
 		return nil, err
@@ -421,10 +426,11 @@ func (t *Transport) init(allowZeroLengthConnIDs bool) error {
 		t.statelessResetter = newStatelessResetter(t.StatelessResetKey)
 
 		// Server-side packet handling (Listen) consumes the per-datagram
-		// source address for retry tokens, stateless resets and tracers;
-		// make sure it is parsed. Client (dial-only) use keeps the
+		// source address for retry tokens, stateless resets and tracers, as
+		// does ReadNonQUICPacket. Dial-only transports that opted out (or
+		// were created by the package-level dial constructors) keep the
 		// allocation-free reader that newConn installed.
-		if t.serverMode {
+		if !t.skipAddrParsing && !t.DisableAddrParsing {
 			enableAddrParsing(conn)
 		}
 		go t.listen(conn)
@@ -691,6 +697,9 @@ func (t *Transport) ReadNonQUICPacket(ctx context.Context, b []byte) (int, net.A
 	if err := t.init(false); err != nil {
 		return 0, nil, err
 	}
+	// This API returns the per-datagram source address to the caller, so the
+	// reader must parse it even on an otherwise dial-only (skipAddr) transport.
+	enableAddrParsing(t.conn)
 	if !t.readingNonQUICPackets.Load() {
 		t.nonQUICPackets = make(chan receivedPacket, maxQueuedNonQUICPackets)
 		t.readingNonQUICPackets.Store(true)
