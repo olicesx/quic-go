@@ -16,7 +16,6 @@ import (
 
 	quic "github.com/olicesx/quic-go"
 	congestion "github.com/olicesx/quic-go/congestion"
-	qerr "github.com/olicesx/quic-go/internal/qerr"
 	gomock "go.uber.org/mock/gomock"
 )
 
@@ -123,7 +122,7 @@ func (c *MockEarlyConnectionAcceptUniStreamCall) DoAndReturn(f func(context.Cont
 }
 
 // CloseWithError mocks base method.
-func (m *MockEarlyConnection) CloseWithError(arg0 qerr.ApplicationErrorCode, arg1 string) error {
+func (m *MockEarlyConnection) CloseWithError(arg0 quic.ApplicationErrorCode, arg1 string) error {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "CloseWithError", arg0, arg1)
 	ret0, _ := ret[0].(error)
@@ -149,13 +148,13 @@ func (c *MockEarlyConnectionCloseWithErrorCall) Return(arg0 error) *MockEarlyCon
 }
 
 // Do rewrite *gomock.Call.Do
-func (c *MockEarlyConnectionCloseWithErrorCall) Do(f func(qerr.ApplicationErrorCode, string) error) *MockEarlyConnectionCloseWithErrorCall {
+func (c *MockEarlyConnectionCloseWithErrorCall) Do(f func(quic.ApplicationErrorCode, string) error) *MockEarlyConnectionCloseWithErrorCall {
 	c.Call = c.Call.Do(f)
 	return c
 }
 
 // DoAndReturn rewrite *gomock.Call.DoAndReturn
-func (c *MockEarlyConnectionCloseWithErrorCall) DoAndReturn(f func(qerr.ApplicationErrorCode, string) error) *MockEarlyConnectionCloseWithErrorCall {
+func (c *MockEarlyConnectionCloseWithErrorCall) DoAndReturn(f func(quic.ApplicationErrorCode, string) error) *MockEarlyConnectionCloseWithErrorCall {
 	c.Call = c.Call.DoAndReturn(f)
 	return c
 }

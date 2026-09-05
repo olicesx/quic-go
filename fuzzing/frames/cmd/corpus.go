@@ -64,7 +64,8 @@ func getAckRanges(num int) []wire.AckRange {
 }
 
 func getFrames() []wire.Frame {
-	frames := []wire.Frame{
+	frames := make([]wire.Frame, 0, 39)
+	frames = append(frames, []wire.Frame{
 		&wire.StreamFrame{ // STREAM frame at 0 offset, with FIN bit
 			StreamID: protocol.StreamID(getRandomNumber()),
 			Fin:      true,
@@ -214,7 +215,7 @@ func getFrames() []wire.Frame {
 			ErrorCode:          getRandomNumber(),
 			ReasonPhrase:       string(getRandomData(100)),
 		},
-	}
+	}...)
 
 	seq1 := getRandomNumber()
 	seq2 := getRandomNumber()

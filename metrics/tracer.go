@@ -71,10 +71,10 @@ func NewTracerWithRegisterer(registerer prometheus.Registerer) *logging.Tracer {
 			defer putStringSlice(tags)
 
 			var reason string
-			switch {
-			case hdr.Type == protocol.PacketTypeRetry:
+			switch hdr.Type {
+			case protocol.PacketTypeRetry:
 				reason = "retry"
-			case hdr.Type == protocol.PacketTypeInitial:
+			case protocol.PacketTypeInitial:
 				var ccf *logging.ConnectionCloseFrame
 				for _, f := range frames {
 					cc, ok := f.(*logging.ConnectionCloseFrame)
@@ -103,6 +103,7 @@ func NewTracerWithRegisterer(registerer prometheus.Registerer) *logging.Tracer {
 					// This shouldn't happen, the server doesn't send application-level CONNECTION_CLOSE frames.
 					reason = "application_error"
 				}
+			case protocol.PacketTypeHandshake, protocol.PacketType0RTT:
 			}
 			*tags = append(*tags, getIPVersion(addr))
 			*tags = append(*tags, reason)

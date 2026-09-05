@@ -13,10 +13,10 @@ import (
 
 const (
 	// https://microsoft.github.io/windows-docs-rs/doc/windows/Win32/Networking/WinSock/constant.IP_DONTFRAGMENT.html
-	//nolint:stylecheck
+	//nolint:staticcheck
 	IP_DONTFRAGMENT = 14
 	// https://microsoft.github.io/windows-docs-rs/doc/windows/Win32/Networking/WinSock/constant.IPV6_DONTFRAG.html
-	//nolint:stylecheck
+	//nolint:staticcheck
 	IPV6_DONTFRAG = 14
 )
 
