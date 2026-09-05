@@ -106,7 +106,7 @@ func (c *connection) openRequestStream(
 	disableCompression bool,
 	maxHeaderBytes uint64,
 ) (*requestStream, error) {
-	str, err := c.Connection.OpenStreamSync(ctx)
+	str, err := c.OpenStreamSync(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -176,7 +176,7 @@ func (c *connection) handleUnidirectionalStreams(hijack func(StreamType, quic.Co
 	)
 
 	for {
-		str, err := c.Connection.AcceptUniStream(context.Background())
+		str, err := c.AcceptUniStream(context.Background())
 		if err != nil {
 			if c.logger != nil {
 				c.logger.Debug("accepting unidirectional stream failed", "error", err)
@@ -283,23 +283,23 @@ func (c *connection) sendDatagram(streamID protocol.StreamID, b []byte) error {
 	data := make([]byte, 0, len(b)+8)
 	data = quicvarint.Append(data, uint64(streamID/4))
 	data = append(data, b...)
-	return c.Connection.SendDatagram(data)
+	return c.SendDatagram(data)
 }
 
 func (c *connection) receiveDatagrams() error {
 	for {
-		b, err := c.Connection.ReceiveDatagram(context.Background())
+		b, err := c.ReceiveDatagram(context.Background())
 		if err != nil {
 			return err
 		}
 		quarterStreamID, n, err := quicvarint.Parse(b)
 		if err != nil {
-			c.Connection.ReleaseDatagram(b)
+			c.ReleaseDatagram(b)
 			c.Connection.CloseWithError(quic.ApplicationErrorCode(ErrCodeDatagramError), "")
 			return fmt.Errorf("could not read quarter stream id: %w", err)
 		}
 		if quarterStreamID > maxQuarterStreamID {
-			c.Connection.ReleaseDatagram(b)
+			c.ReleaseDatagram(b)
 			c.Connection.CloseWithError(quic.ApplicationErrorCode(ErrCodeDatagramError), "")
 			return fmt.Errorf("invalid quarter stream id: %d", quarterStreamID)
 		}
@@ -308,11 +308,11 @@ func (c *connection) receiveDatagrams() error {
 		dg, ok := c.streams[streamID]
 		c.streamMx.Unlock()
 		if !ok {
-			c.Connection.ReleaseDatagram(b)
+			c.ReleaseDatagram(b)
 			continue
 		}
 		payload := append([]byte(nil), b[n:]...)
-		c.Connection.ReleaseDatagram(b)
+		c.ReleaseDatagram(b)
 		dg.enqueue(payload)
 	}
 }

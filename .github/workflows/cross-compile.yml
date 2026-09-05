@@ -1,10 +1,10 @@
-on: [push, pull_request]
+on: [push, pull_request, workflow_dispatch]
 jobs:
   crosscompile:
     strategy:
       fail-fast: false
       matrix:
-        go: [ "1.22.x", "1.23.x" ]
+        go: [ "1.24.x", "1.26.x" ]
     runs-on: ${{ fromJSON(vars['CROSS_COMPILE_RUNNER_UBUNTU'] || '"ubuntu-latest"') }}
     name: "Cross Compilation (Go ${{matrix.go}})"
     timeout-minutes: 30

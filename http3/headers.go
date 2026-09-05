@@ -75,10 +75,6 @@ func decodeFromSlice(headers []qpack.HeaderField) qpack.DecodeFunc {
 	}
 }
 
-func parseHeaders(headers []qpack.HeaderField, isRequest bool) (header, error) {
-	return parseHeadersIncremental(decodeFromSlice(headers), isRequest, math.MaxInt)
-}
-
 func parseHeadersIncremental(decode qpack.DecodeFunc, isRequest bool, sizeLimit int) (header, error) {
 	hdr := header{Headers: make(http.Header)}
 	var readFirstRegularHeader, readContentLength bool

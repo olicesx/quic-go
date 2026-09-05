@@ -2404,7 +2404,7 @@ func TestConnectionPropagatesSendQueueError(t *testing.T) {
 	tc.packer.EXPECT().AppendPacket(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(
 		func(buf *packetBuffer, _ protocol.ByteCount, _ time.Time, _ protocol.Version) (shortHeaderPacket, error) {
 			buf.Data = append(buf.Data, "packet"...)
-			return shortHeaderPacket{PacketNumber: 1, Length: protocol.ByteCount(buf.Len())}, nil
+			return shortHeaderPacket{PacketNumber: 1, Length: buf.Len()}, nil
 		},
 	)
 	sendErr := errors.New("sender stopped")

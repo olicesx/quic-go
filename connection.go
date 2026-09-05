@@ -1933,10 +1933,12 @@ func (s *connection) sendPackets(now time.Time) error {
 			return err
 		}
 		sendMode := s.sentPacketHandler.SendMode(now)
-		if sendMode == ackhandler.SendPacingLimited {
+		switch sendMode {
+		case ackhandler.SendPacingLimited:
 			s.resetPacingDeadline()
-		} else if sendMode == ackhandler.SendAny {
+		case ackhandler.SendAny:
 			s.pacingDeadline = deadlineSendImmediately
+		case ackhandler.SendNone, ackhandler.SendAck, ackhandler.SendPTOInitial, ackhandler.SendPTOHandshake, ackhandler.SendPTOAppData:
 		}
 		return nil
 	}

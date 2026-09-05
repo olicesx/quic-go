@@ -298,7 +298,7 @@ func (c *oobConn) WritePacket(b []byte, addr net.Addr, packetInfoOOB []byte, gso
 			oob = appendIPv6ECNMsg(oob, ecn)
 		}
 	}
-	n, _, err := c.OOBCapablePacketConn.WriteMsgUDP(b, oob, udpAddr)
+	n, _, err := c.WriteMsgUDP(b, oob, udpAddr)
 	return n, err
 }
 
