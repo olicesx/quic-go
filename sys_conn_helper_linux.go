@@ -15,8 +15,9 @@ import (
 )
 
 const (
-	msgTypeIPTOS = unix.IP_TOS
-	ipv4PKTINFO  = unix.IP_PKTINFO
+	msgTypeIPTOS  = unix.IP_TOS
+	ipv4PKTINFO   = unix.IP_PKTINFO
+	msgTypeUDPGRO = unix.UDP_GRO
 )
 
 const ecnIPv4DataLen = 1

@@ -250,7 +250,7 @@ func (c *oobConn) ReadPacket() (receivedPacket, error) {
 		}
 		if hdr.Level == unix.IPPROTO_UDP {
 			switch hdr.Type {
-			case unix.UDP_GRO:
+			case msgTypeUDPGRO:
 				// The payload is a native-endian uint16 carrying the
 				// segment size the kernel coalesced this datagram from.
 				if len(body) >= 2 {

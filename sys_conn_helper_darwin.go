@@ -13,6 +13,9 @@ import (
 const (
 	msgTypeIPTOS = unix.IP_RECVTOS
 	ipv4PKTINFO  = unix.IP_RECVPKTINFO
+	// No UDP GRO receive on darwin: isGROEnabled stubs to false, so the
+	// cmsg type never appears on the wire and the sentinel never matches.
+	msgTypeUDPGRO = -1
 )
 
 const ecnIPv4DataLen = 4
@@ -34,5 +37,7 @@ func parseIPv4PktInfo(body []byte) (ip netip.Addr, ifIndex uint32, ok bool) {
 }
 
 func isGSOEnabled(syscall.RawConn) bool { return false }
+
+func isGROEnabled(syscall.RawConn) bool { return false }
 
 func isECNEnabled() bool { return !isECNDisabledUsingEnv() }
