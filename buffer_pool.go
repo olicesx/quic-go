@@ -86,13 +86,6 @@ func getLargePacketBuffer() *packetBuffer {
 	return buf
 }
 
-func getGroPacketBuffer() *packetBuffer {
-	buf := groBufferPool.Get().(*packetBuffer)
-	buf.refCount = 1
-	buf.Data = buf.Data[:0]
-	return buf
-}
-
 func init() {
 	bufferPool.New = func() any {
 		return &packetBuffer{Data: make([]byte, 0, protocol.MaxPacketBufferSize)}
