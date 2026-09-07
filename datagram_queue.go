@@ -105,15 +105,16 @@ type datagramQueue struct {
 	sendQueue ringbuffer.RingBuffer[*wire.DatagramFrame]
 	sent      chan struct{} // used to notify Add that a datagram was dequeued
 
-	rcvMx    sync.Mutex
-	rcvQueue [][]byte
-	// rcvHead indexes the next unconsumed entry in rcvQueue. Consuming by
-	// index instead of re-slicing keeps the pre-allocated backing array
-	// usable: [1:] would monotonically shrink the appendable window until a
-	// reallocation copies the whole queue, and the queue is compacted back
-	// to rcvQueue[:0] every time it drains empty.
-	rcvHead int
-	rcvd    chan struct{} // used to notify Receive that a new datagram was received
+	rcvMx sync.Mutex
+	// rcvQueue holds received datagram buffers. A ring buffer is used so that
+	// consumed entries release their slots immediately: the previous
+	// slice+head scheme retained every consumed header until the queue fully
+	// drained, so sustained traffic with a never-empty queue grew the backing
+	// array without bound. RingBuffer clears popped slots and only grows when
+	// PushBack runs past the initialized capacity, which the admission guard
+	// below prevents.
+	rcvQueue ringbuffer.RingBuffer[[]byte]
+	rcvd     chan struct{} // used to notify Receive that a new datagram was received
 
 	closeErr error
 	closed   chan struct{}
@@ -124,16 +125,17 @@ type datagramQueue struct {
 }
 
 func newDatagramQueue(hasData func(), logger utils.Logger) *datagramQueue {
-	return &datagramQueue{
+	q := &datagramQueue{
 		hasData: hasData,
 		rcvd:    make(chan struct{}, 1),
 		sent:    make(chan struct{}, 1),
 		closed:  make(chan struct{}),
 		logger:  logger,
-		// Pre-allocate the receive queue so steady-state enqueue never
-		// triggers slice growth allocations.
-		rcvQueue: make([][]byte, 0, maxDatagramRcvQueueLen),
 	}
+	// Pre-allocate the receive ring so steady-state enqueue never triggers
+	// growth allocations.
+	q.rcvQueue.Init(maxDatagramRcvQueueLen)
+	return q
 }
 
 // Add queues a new DATAGRAM frame for sending.
@@ -157,7 +159,6 @@ func (h *datagramQueue) Add(f *wire.DatagramFrame) error {
 		select {
 		case <-h.closed:
 			h.sendMx.Unlock()
-			wire.PutDatagramFrame(f)
 			return h.closeErr
 		default:
 		}
@@ -178,16 +179,14 @@ func (h *datagramQueue) Add(f *wire.DatagramFrame) error {
 		}
 		select {
 		case <-h.closed:
-			// Connection closed while blocked on a full queue: the frame
-			// was never sent, return it to the pool.
-			wire.PutDatagramFrame(f)
+			// Connection closed while blocked on a full queue; the frame was
+			// never sent and is released by the GC.
 			return h.closeErr
 		case <-h.sent:
 		case <-timer.C:
 			// Queue stayed full for the whole timeout: the transport is
 			// stalled, not merely backpressured. Drop this datagram and
 			// surface a bounded error instead of parking forever.
-			wire.PutDatagramFrame(f)
 			return ErrDatagramQueueFullTimeout
 		}
 		h.sendMx.Lock()
@@ -231,14 +230,10 @@ func (h *datagramQueue) HandleDatagramFrame(f *wire.DatagramFrame) {
 	wire.PutDatagramFrame(f)
 	var queued bool
 	h.rcvMx.Lock()
-	if len(h.rcvQueue)-h.rcvHead < maxDatagramRcvQueueLen {
-		// Compact once the queue fully drains so the pre-allocated backing
-		// array stays usable without ever copying live entries.
-		if h.rcvHead > 0 && h.rcvHead == len(h.rcvQueue) {
-			h.rcvQueue = h.rcvQueue[:0]
-			h.rcvHead = 0
-		}
-		h.rcvQueue = append(h.rcvQueue, buf)
+	if h.rcvQueue.Len() < maxDatagramRcvQueueLen {
+		// The ring grows when PushBack runs past its initialized capacity, so
+		// the Len admission guard is what keeps the storage bounded.
+		h.rcvQueue.PushBack(buf)
 		queued = true
 		select {
 		case h.rcvd <- struct{}{}:
@@ -278,9 +273,8 @@ func (h *datagramQueue) ReleaseDatagram(data []byte) {
 func (h *datagramQueue) Receive(ctx context.Context) ([]byte, error) {
 	for {
 		h.rcvMx.Lock()
-		if h.rcvHead < len(h.rcvQueue) {
-			data := h.rcvQueue[h.rcvHead]
-			h.rcvHead++
+		if !h.rcvQueue.Empty() {
+			data := h.rcvQueue.PopFront()
 			h.rcvMx.Unlock()
 			return data, nil
 		}
@@ -303,15 +297,13 @@ func (h *datagramQueue) CloseWithError(e error) {
 	// and ReceiveDatagram stop after the connection run loop exits, so
 	// leftover entries would otherwise sit until GC.
 	h.sendMx.Lock()
-	for !h.sendQueue.Empty() {
-		wire.PutDatagramFrame(h.sendQueue.PopFront())
-	}
+	// Queued send frames are send-side owned (never pooled); dropping the
+	// queue releases them to the GC.
+	h.sendQueue.Clear()
 	h.sendMx.Unlock()
 	h.rcvMx.Lock()
-	for _, buf := range h.rcvQueue[h.rcvHead:] {
-		datagramBufPool.Put(buf)
+	for !h.rcvQueue.Empty() {
+		datagramBufPool.Put(h.rcvQueue.PopFront())
 	}
-	h.rcvQueue = h.rcvQueue[:0]
-	h.rcvHead = 0
 	h.rcvMx.Unlock()
 }

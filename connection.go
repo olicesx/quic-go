@@ -494,6 +494,27 @@ func (s *connection) preSetup() {
 	s.connState.Version = s.version
 }
 
+// abortAfterStartupFailure finalizes a connection whose run loop failed
+// before the send queue was launched (StartHandshake or the initial
+// handshake-event processing). The normal shutdown path closes the crypto
+// handler and the send queue before handleCloseError, because the latter may
+// queue a CONNECTION_CLOSE for transmission; on startup failure nothing was
+// ever sent, so the finalizer must not touch the send queue (its Close waits
+// for Run to exit and would deadlock here) and must not transmit. Immediate
+// mode removes the registered connection IDs and closes the stream/datagram
+// machinery without sending; the tracer is closed exactly once. The deferred
+// context cancellation and queued-packet drain of run() still apply.
+func (s *connection) abortAfterStartupFailure(startupErr error) error {
+	s.cryptoStreamHandler.Close()
+	s.handleCloseError(&closeError{err: startupErr, immediate: true})
+	if s.tracer != nil && s.tracer.Close != nil {
+		s.tracer.Close()
+	}
+	s.logger.Infof("Connection %s closed.", s.logID)
+	s.timer.Stop()
+	return startupErr
+}
+
 // run the connection main loop
 func (s *connection) run() error {
 	var closeErr closeError
@@ -518,10 +539,10 @@ func (s *connection) run() error {
 	s.timer = *newTimer()
 
 	if err := s.cryptoStreamHandler.StartHandshake(s.ctx); err != nil {
-		return err
+		return s.abortAfterStartupFailure(err)
 	}
 	if err := s.handleHandshakeEvents(time.Now()); err != nil {
-		return err
+		return s.abortAfterStartupFailure(err)
 	}
 	go func() {
 		if err := s.sendQueue.Run(); err != nil {
@@ -2421,27 +2442,26 @@ func (s *connection) SendDatagram(p []byte) error {
 		return errors.New("datagram support disabled")
 	}
 
-	f := wire.GetDatagramFrame()
-	f.DataLenPresent = true
 	// The payload size estimate is conservative.
 	// Under many circumstances we could send a few more bytes.
+	// Send-side DATAGRAM frames are deliberately NOT pooled: a pooled frame
+	// is returned to the pool right after serialization, but the packet
+	// (and its qlog tracing) still references it, so the next SendDatagram
+	// could overwrite the payload and reset the length while logging or
+	// ACK bookkeeping reads it. An independently owned frame and payload
+	// are garbage-collected once the packet and queue release them.
+	probe := &wire.DatagramFrame{DataLenPresent: true}
 	maxDataLen := min(
-		f.MaxDataLen(s.peerParams.MaxDatagramFrameSize, s.version),
+		probe.MaxDataLen(s.peerParams.MaxDatagramFrameSize, s.version),
 		protocol.ByteCount(s.maxPayloadSizeEstimate.Load()),
 	)
 	if protocol.ByteCount(len(p)) > maxDataLen {
-		wire.PutDatagramFrame(f)
 		return &DatagramTooLargeError{
 			MaxDataLen: int64(maxDataLen),
 		}
 	}
-	if protocol.ByteCount(cap(f.Data)) < protocol.ByteCount(len(p)) {
-		// Oversized datagram (larger than the pool cap): allocate fresh;
-		// PutDatagramFrame will skip pooling it back.
-		f.Data = make([]byte, len(p))
-	} else {
-		f.Data = f.Data[:len(p)]
-	}
+	f := &wire.DatagramFrame{DataLenPresent: true}
+	f.Data = make([]byte, len(p))
 	copy(f.Data, p)
 	return s.datagramQueue.Add(f)
 }

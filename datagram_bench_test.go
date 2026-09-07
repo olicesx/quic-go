@@ -37,7 +37,7 @@ func BenchmarkDatagramReceiveLegacy(b *testing.B) {
 		data := make([]byte, len(f.Data))
 		copy(data, f.Data)
 		q.rcvMx.Lock()
-		q.rcvQueue = append(q.rcvQueue, data)
+		q.rcvQueue.PushBack(data)
 		q.rcvMx.Unlock()
 		_, err := q.Receive(context.Background())
 		if err != nil {

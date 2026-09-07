@@ -261,3 +261,38 @@ func TestDatagramQueueCloseWithErrorDrainsQueuedFrames(t *testing.T) {
 	late := wire.GetDatagramFrame()
 	require.Error(t, queue.Add(late))
 }
+
+// TestReceiveQueueStorageBoundedWithoutFullDrain pins the ring-buffer
+// conversion: consuming entries must release their slots even while the queue
+// never fully drains, so the underlying storage stays at the initialized
+// capacity across many receive/release/enqueue cycles.
+func TestReceiveQueueStorageBoundedWithoutFullDrain(t *testing.T) {
+	q := newDatagramQueue(nil, nil)
+	f := &wire.DatagramFrame{Data: make([]byte, 64)}
+
+	// Seed two entries, then run many cycles that keep at least one entry
+	// queued at every enqueue (the old slice+head scheme retained every
+	// consumed header in this pattern, growing without bound).
+	q.HandleDatagramFrame(f)
+	q.HandleDatagramFrame(f)
+	for i := 0; i < 20000; i++ {
+		data, err := q.Receive(context.Background())
+		if err != nil {
+			t.Fatalf("Receive: %v", err)
+		}
+		q.ReleaseDatagram(data)
+		q.HandleDatagramFrame(f) // never lets the queue drain empty
+		if q.rcvQueue.Len() != 2 {
+			t.Fatalf("iteration %d: queue len = %d, want 2", i, q.rcvQueue.Len())
+		}
+	}
+	// Drain in FIFO order.
+	for i := 0; i < 2; i++ {
+		if _, err := q.Receive(context.Background()); err != nil {
+			t.Fatalf("final Receive %d: %v", i, err)
+		}
+	}
+	if !q.rcvQueue.Empty() {
+		t.Fatal("queue must be empty after drain")
+	}
+}
