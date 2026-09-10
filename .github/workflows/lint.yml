@@ -46,6 +46,11 @@ jobs:
         go: [ "1.24.x", "1.26.x" ]
     env:
       GOLANGCI_LINT_VERSION: v2.11.4
+      # golangci-lint v2.11.4 requires Go >= 1.25.0 to build (its own go.mod).
+      # setup-go only leaves the toolchain free to switch while it doesn't
+      # export GOTOOLCHAIN=local; pinning it here keeps the 1.24 leg from
+      # failing on a property of the tool instead of on this repository.
+      GOTOOLCHAIN: auto
     name: golangci-lint (Go ${{ matrix.go }})
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -56,14 +61,16 @@ jobs:
         run: go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@${{ env.GOLANGCI_LINT_VERSION }}
       - name: Assert linter Go version >= module Go version
         # Fail closed: a linter that's too old for the module's Go version would
-        # silently reduce analysis fidelity. Separate "tool too old" from
-        # "code violates the linter".
+        # silently reduce analysis fidelity. "the linter is too old" and "the
+        # linter's Go version cannot be read" are reported separately, and the
+        # raw version output is included so the two can be told apart.
         run: |
           set -euo pipefail
           want="go$(awk '/^go /{print $2; exit}' go.mod)"
-          got="$(golangci-lint version 2>&1 | sed -n 's/.*built with \(go[0-9.]*\).*/\1/p')"
+          version_output="$(golangci-lint version 2>&1)"
+          got="$(printf '%s\n' "$version_output" | sed -n 's/.*built with \(go[0-9][0-9.]*\).*/\1/p' | head -1)"
           if [ -z "$got" ]; then
-            echo "::error::could not determine the Go version golangci-lint was built with"
+            echo "::error::could not determine the Go version golangci-lint was built with; golangci-lint version reported: ${version_output}"
             exit 1
           fi
           if [ "$(printf '%s\n%s\n' "$want" "$got" | sort -V | head -1)" != "$want" ]; then
@@ -76,39 +83,30 @@ jobs:
           install-mode: goinstall
           args: --timeout=3m
           version: ${{ env.GOLANGCI_LINT_VERSION }}
+      # The steps below only vary GOOS, so that the type checker sees the files
+      # behind the platform build tags. They must reuse the linter installed
+      # above instead of installing it again: the action runs `go install` with
+      # the step's GOOS, so it cross-compiles the linter for the target OS,
+      # which fails on FreeBSD (no cross C toolchain, runtime/cgo) and produces
+      # an unrunnable binary on the Linux runner (exit code 126, "Exec format
+      # error") for the others.
       - name: golangci-lint (Windows)
         if: success() || failure() # run this step even if the previous one failed
-        uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9
+        run: '"$(go env GOPATH)/bin/golangci-lint" run --timeout=3m'
         env:
           GOOS: "windows"
-        with:
-          install-mode: goinstall
-          args: --timeout=3m
-          version: ${{ env.GOLANGCI_LINT_VERSION }}
       - name: golangci-lint (OSX)
         if: success() || failure() # run this step even if the previous one failed
-        uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9
+        run: '"$(go env GOPATH)/bin/golangci-lint" run --timeout=3m'
         env:
           GOOS: "darwin"
-        with:
-          install-mode: goinstall
-          args: --timeout=3m
-          version: ${{ env.GOLANGCI_LINT_VERSION }}
       - name: golangci-lint (FreeBSD)
         if: success() || failure() # run this step even if the previous one failed
-        uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9
+        run: '"$(go env GOPATH)/bin/golangci-lint" run --timeout=3m'
         env:
           GOOS: "freebsd"
-        with:
-          install-mode: goinstall
-          args: --timeout=3m
-          version: ${{ env.GOLANGCI_LINT_VERSION }}
       - name: golangci-lint (others)
         if: success() || failure() # run this step even if the previous one failed
-        uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9
+        run: '"$(go env GOPATH)/bin/golangci-lint" run --timeout=3m'
         env:
           GOOS: "solaris" # some OS that we don't have any build tags for
-        with:
-          install-mode: goinstall
-          args: --timeout=3m
-          version: ${{ env.GOLANGCI_LINT_VERSION }}

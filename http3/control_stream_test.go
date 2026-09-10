@@ -56,8 +56,15 @@ func newGoAwayTestConn(t *testing.T) *goAwayTestConn {
 	controlStr := mockquic.NewMockStream(mockCtrl)
 	controlStr.EXPECT().Read(gomock.Any()).DoAndReturn(pr.Read).AnyTimes()
 	controlStr.EXPECT().StreamID().Return(quic.StreamID(3)).AnyTimes()
+	// The connection passes the control stream on to a handler goroutine and
+	// immediately asks for the next stream. That second call is made
+	// asynchronously, so the test has to wait for it: otherwise the mock
+	// controller can be verified before the connection got around to making
+	// it, and reports the expected call as missing.
+	nextUniStreamRequested := make(chan struct{})
 	conn.EXPECT().AcceptUniStream(gomock.Any()).Return(controlStr, nil)
 	conn.EXPECT().AcceptUniStream(gomock.Any()).DoAndReturn(func(context.Context) (quic.ReceiveStream, error) {
+		close(nextUniStreamRequested)
 		<-done
 		return nil, errors.New("test done")
 	})
@@ -75,6 +82,14 @@ func newGoAwayTestConn(t *testing.T) *goAwayTestConn {
 	case <-cc.ReceivedSettings():
 	case <-time.After(time.Second):
 		t.Fatal("timeout waiting for the SETTINGS frame")
+	}
+	// The control stream is handled, so the connection must already be
+	// accepting the next one. Waiting here keeps the mock controller's
+	// verification from racing with that call.
+	select {
+	case <-nextUniStreamRequested:
+	case <-time.After(time.Second):
+		t.Fatal("timeout waiting for the connection to accept the next unidirectional stream")
 	}
 	return &goAwayTestConn{mockCtrl: mockCtrl, cc: cc, conn: conn, controlPipe: pw, done: done}
 }
