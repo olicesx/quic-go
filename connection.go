@@ -1626,12 +1626,52 @@ func (s *connection) handleDatagramFrame(f *wire.DatagramFrame) error {
 	return nil
 }
 
+// isGracefulTeardown reports whether a connection teardown carries no error.
+//
+// A CONNECTION_CLOSE frame whose application code is 0 carries the QUIC
+// NO_ERROR code: the peer (or this endpoint) closed the connection on purpose.
+// That is how a consumer tears a connection down when it is done with it -
+// dae closes every DNS-over-QUIC connection with CloseWithError(0, "") - so it
+// is a per-connection milestone, not a fault. Reporting it at error level put
+// one error line on every routine teardown and drowned the teardowns that do
+// carry an error.
+//
+// Only an explicit NO_ERROR counts: every other application code, and every
+// transport error, keeps its error-level report.
+func isGracefulTeardown(e error) bool {
+	var appErr *qerr.ApplicationError
+	return errors.As(e, &appErr) && appErr.ErrorCode == 0
+}
+
+// isIdleTimeout reports whether the connection ended because it was left
+// unused. It is the normal end of a pooled connection (quic-go's default idle
+// timeout is 30s), so it is reported as a milestone rather than an error. A
+// handshake timeout is deliberately not covered: the peer never answered, and
+// that is worth an error line.
+func isIdleTimeout(e error) bool {
+	var idleErr *qerr.IdleTimeoutError
+	return errors.As(e, &idleErr)
+}
+
+// isTimeout reports whether e is the timeout flavour of an error, the case the
+// teardown log wording distinguishes from a non-timeout destruction.
+func isTimeout(e error) bool {
+	nerr, ok := e.(net.Error)
+	return ok && nerr.Timeout()
+}
+
 // closeLocal closes the connection and send a CONNECTION_CLOSE containing the error
 func (s *connection) closeLocal(e error) {
 	s.closeOnce.Do(func() {
-		if e == nil {
+		switch {
+		case e == nil:
 			s.logger.Infof("Closing connection.")
-		} else {
+		case isGracefulTeardown(e):
+			// Same reason as Destroying connection below: the reason phrase of
+			// CloseWithError(0, reason) is still printed, so only the level
+			// changes.
+			s.logger.Infof("Closing connection (%s).", e)
+		default:
 			s.logger.Errorf("Closing connection with error: %s", e)
 		}
 		s.closeChan <- closeError{err: e, immediate: false, remote: false}
@@ -1646,9 +1686,18 @@ func (s *connection) destroy(e error) {
 
 func (s *connection) destroyImpl(e error) {
 	s.closeOnce.Do(func() {
-		if nerr, ok := e.(net.Error); ok && nerr.Timeout() {
+		switch {
+		case e == nil:
+			// A dial that was cancelled mid-handshake drops the connection
+			// without a cause. There is nothing for the operator to act on and
+			// no error to print - the old wording rendered the nil as
+			// "Destroying connection with error: %!s(<nil>)".
+			s.logger.Infof("Destroying connection.")
+		case isIdleTimeout(e):
+			s.logger.Infof("Destroying connection: %s", e)
+		case isTimeout(e):
 			s.logger.Errorf("Destroying connection: %s", e)
-		} else {
+		default:
 			s.logger.Errorf("Destroying connection with error: %s", e)
 		}
 		s.closeChan <- closeError{err: e, immediate: true, remote: false}
@@ -1657,7 +1706,17 @@ func (s *connection) destroyImpl(e error) {
 
 func (s *connection) closeRemote(e error) {
 	s.closeOnce.Do(func() {
-		s.logger.Errorf("Peer closed connection with error: %s", e)
+		switch {
+		case e == nil:
+			s.logger.Infof("Peer closed connection.")
+		case isGracefulTeardown(e):
+			// The peer sent CONNECTION_CLOSE with NO_ERROR, i.e. it closed the
+			// connection when it was done. Milestone, not fault - same rule as
+			// closeLocal.
+			s.logger.Infof("Peer closed connection (%s).", e)
+		default:
+			s.logger.Errorf("Peer closed connection with error: %s", e)
+		}
 		s.closeChan <- closeError{err: e, immediate: true, remote: true}
 	})
 }
@@ -2401,14 +2460,26 @@ func (s *connection) tryQueueingUndecryptablePacket(p receivedPacket, pt logging
 	if s.handshakeComplete {
 		panic("shouldn't queue undecryptable packets after handshake completion")
 	}
+	// Both lines below fire once per packet, so they belong at debug level, the
+	// level that already carries the per-packet detail: a reordered handshake
+	// queues up to protocol.MaxUndecryptablePackets of them, and a peer that
+	// keeps sending undecryptable packets drops one more packet per line once
+	// the queue is full. At info level they buried the once-per-connection
+	// milestones that level is for.
+	//
+	// Nothing is lost by the downgrade: the tracer callbacks immediately below
+	// fire regardless of the log level, so a consumer that wants to observe
+	// buffering or DOS-prevention drops programmatically keeps doing so, and
+	// the queue staying full still ends the handshake with an error-level
+	// handshake-timeout report.
 	if len(s.undecryptablePackets)+1 > protocol.MaxUndecryptablePackets {
 		if s.tracer != nil && s.tracer.DroppedPacket != nil {
 			s.tracer.DroppedPacket(pt, protocol.InvalidPacketNumber, p.Size(), logging.PacketDropDOSPrevention)
 		}
-		s.logger.Infof("Dropping undecryptable packet (%d bytes). Undecryptable packet queue full.", p.Size())
+		s.logger.Debugf("Dropping undecryptable packet (%d bytes). Undecryptable packet queue full.", p.Size())
 		return
 	}
-	s.logger.Infof("Queueing packet (%d bytes) for later decryption", p.Size())
+	s.logger.Debugf("Queueing packet (%d bytes) for later decryption", p.Size())
 	if s.tracer != nil && s.tracer.BufferedPacket != nil {
 		s.tracer.BufferedPacket(pt, p.Size())
 	}
