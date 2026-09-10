@@ -37,6 +37,12 @@ type receiveStream struct {
 	readPosInFrame     int
 	currentFrameIsLast bool // is the currentFrame the last frame on this stream
 
+	// shutdownTruncated is set when closeForShutdown dropped a partially read
+	// frame. releasePendingFrames clears currentFrame but leaves
+	// currentFrameIsLast set, so without this flag the reader would mistake the
+	// shutdown for a natural EOF and silently lose the unread bytes.
+	shutdownTruncated bool
+
 	queuedStopSending   bool
 	queuedMaxStreamData bool
 
@@ -136,7 +142,13 @@ func (s *receiveStream) readImpl(p []byte) (hasStreamWindowUpdate bool, hasConnW
 	// nil` would otherwise be mistaken for a natural EOF and swallow the
 	// cancel error. The errorRead flag set by the cancelled path does not
 	// distinguish the two, but a non-nil cancelErr does.
-	if s.cancelErr == nil && s.currentFrameIsLast && s.currentFrame == nil {
+	//
+	// closeForShutdown has the same shape: it drops the in-flight frame
+	// (silently losing the unread bytes, which were already returned to the
+	// shared pool), so a truncated shutdown must report closeForShutdownErr
+	// instead of a clean io.EOF. shutdownTruncated is exactly the case where
+	// the reader had not finished the current frame.
+	if s.cancelErr == nil && !s.shutdownTruncated && s.currentFrameIsLast && s.currentFrame == nil {
 		s.errorRead = true
 		return false, false, 0, io.EOF
 	}
@@ -404,6 +416,10 @@ func (s *receiveStream) SetReadDeadline(t time.Time) error {
 func (s *receiveStream) closeForShutdown(err error) {
 	s.mutex.Lock()
 	s.closeForShutdownErr = err
+	// Check before releasePendingFrames nils out currentFrame: a non-nil
+	// currentFrame means this shutdown drops bytes the application hasn't read
+	// yet, which must not be reported as a clean io.EOF.
+	s.shutdownTruncated = s.currentFrame != nil
 	s.releasePendingFrames()
 	s.mutex.Unlock()
 	s.signalRead()

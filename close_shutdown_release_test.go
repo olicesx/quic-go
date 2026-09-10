@@ -129,6 +129,96 @@ func TestReceiveStreamCloseForShutdownUnblocksReader(t *testing.T) {
 	}
 }
 
+// A shutdown that drops a partially read frame must not be reported as a clean
+// io.EOF. The unread bytes are gone (releasePendingFrames already returned the
+// frame to the shared pool), so a caller treating io.EOF as "stream completed
+// successfully" would relay a truncated stream as if it were complete.
+func TestReceiveStreamShutdownTruncationReportsError(t *testing.T) {
+	mockCtrl := gomock.NewController(t)
+	mockFC := mocks.NewMockStreamFlowController(mockCtrl)
+	mockSender := NewMockStreamSender(mockCtrl)
+	// A regression here surfaces as a clean io.EOF, which completes the stream.
+	mockSender.EXPECT().onStreamCompleted(gomock.Any()).AnyTimes()
+	str := newReceiveStream(42, mockSender, mockFC)
+
+	now := time.Now()
+	mockFC.EXPECT().UpdateHighestReceived(protocol.ByteCount(11), true, now)
+	mockFC.EXPECT().AddBytesRead(protocol.ByteCount(4))
+	require.NoError(t, str.handleStreamFrame(
+		&wire.StreamFrame{Data: []byte("hello world"), Fin: true}, now))
+
+	// Read only part of the frame, so currentFrame is still non-nil and holds
+	// the bytes the application hasn't seen yet.
+	b := make([]byte, 4)
+	n, err := (&readerWithTimeout{Reader: str, Timeout: time.Second}).Read(b)
+	require.NoError(t, err)
+	require.Equal(t, 4, n)
+
+	shutdownErr := errors.New("shut down")
+	str.closeForShutdown(shutdownErr)
+
+	n, err = (&readerWithTimeout{Reader: str, Timeout: time.Second}).Read(make([]byte, 16))
+	require.Zero(t, n)
+	require.ErrorIs(t, err, shutdownErr)
+	require.NotErrorIs(t, err, io.EOF)
+}
+
+// A stream that already reached its natural end keeps returning io.EOF after a
+// connection shutdown: no bytes were dropped, so there is nothing to report.
+func TestReceiveStreamNaturalEOFPersistsAcrossShutdown(t *testing.T) {
+	mockCtrl := gomock.NewController(t)
+	mockFC := mocks.NewMockStreamFlowController(mockCtrl)
+	mockSender := NewMockStreamSender(mockCtrl)
+	str := newReceiveStream(42, mockSender, mockFC)
+
+	now := time.Now()
+	mockFC.EXPECT().UpdateHighestReceived(protocol.ByteCount(5), true, now)
+	mockFC.EXPECT().AddBytesRead(protocol.ByteCount(5))
+	mockSender.EXPECT().onStreamCompleted(protocol.StreamID(42))
+	require.NoError(t, str.handleStreamFrame(
+		&wire.StreamFrame{Data: []byte("hello"), Fin: true}, now))
+
+	b := make([]byte, 8)
+	n, err := (&readerWithTimeout{Reader: str, Timeout: time.Second}).Read(b)
+	require.Equal(t, 5, n)
+	require.ErrorIs(t, err, io.EOF)
+
+	str.closeForShutdown(errors.New("shut down"))
+
+	// The shutdown must not turn the completed stream into an error.
+	n, err = (&readerWithTimeout{Reader: str, Timeout: time.Second}).Read(b)
+	require.Zero(t, n)
+	require.ErrorIs(t, err, io.EOF)
+}
+
+// A shutdown before the FIN (mid-stream) drops data as well, and must report
+// the shutdown error. This is an anchor for the truncation predicate: it is
+// not enough to look at currentFrameIsLast alone.
+func TestReceiveStreamMidStreamShutdownReportsError(t *testing.T) {
+	mockCtrl := gomock.NewController(t)
+	mockFC := mocks.NewMockStreamFlowController(mockCtrl)
+	mockSender := NewMockStreamSender(mockCtrl)
+	mockSender.EXPECT().onStreamCompleted(gomock.Any()).AnyTimes()
+	str := newReceiveStream(42, mockSender, mockFC)
+
+	now := time.Now()
+	mockFC.EXPECT().UpdateHighestReceived(protocol.ByteCount(11), false, now)
+	mockFC.EXPECT().AddBytesRead(protocol.ByteCount(4))
+	require.NoError(t, str.handleStreamFrame(&wire.StreamFrame{Data: []byte("hello world")}, now))
+
+	b := make([]byte, 4)
+	n, err := (&readerWithTimeout{Reader: str, Timeout: time.Second}).Read(b)
+	require.NoError(t, err)
+	require.Equal(t, 4, n)
+
+	shutdownErr := errors.New("shut down")
+	str.closeForShutdown(shutdownErr)
+
+	n, err = (&readerWithTimeout{Reader: str, Timeout: time.Second}).Read(make([]byte, 16))
+	require.Zero(t, n)
+	require.ErrorIs(t, err, shutdownErr)
+}
+
 func TestReceiveStreamCancelReadReleasesQueuedFrames(t *testing.T) {
 	mockCtrl := gomock.NewController(t)
 	mockFC := mocks.NewMockStreamFlowController(mockCtrl)
