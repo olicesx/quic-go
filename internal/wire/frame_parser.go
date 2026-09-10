@@ -36,6 +36,12 @@ const (
 	handshakeDoneFrameType      = 0x1e
 )
 
+// errDatagramNotNegotiated is returned when a DATAGRAM frame is received, but
+// this endpoint didn't advertise support for datagrams.
+// RFC 9221, Section 3 requires treating this as a connection error of type
+// PROTOCOL_VIOLATION.
+var errDatagramNotNegotiated = errors.New("received DATAGRAM frame without datagram support")
+
 // The FrameParser parses QUIC frames, one by one.
 type FrameParser struct {
 	ackDelayExponent  uint8
@@ -80,9 +86,19 @@ func (p *FrameParser) parseNext(b []byte, encLevel protocol.EncryptionLevel, v p
 		f, l, err := p.parseFrame(b, typ, encLevel, v)
 		parsed += l
 		if err != nil {
+			// RFC 9221, Section 3: receiving a DATAGRAM frame when we didn't
+			// advertise support for datagrams is a PROTOCOL_VIOLATION, not a
+			// frame encoding error.
+			// This only depends on the local configuration: when using 0-RTT,
+			// the peer is allowed to use the value it received on a previous
+			// connection to this endpoint.
+			code := qerr.FrameEncodingError
+			if errors.Is(err, errDatagramNotNegotiated) {
+				code = qerr.ProtocolViolation
+			}
 			return nil, parsed, &qerr.TransportError{
 				FrameType:    typ,
-				ErrorCode:    qerr.FrameEncodingError,
+				ErrorCode:    code,
 				ErrorMessage: err.Error(),
 			}
 		}
@@ -146,7 +162,7 @@ func (p *FrameParser) parseFrame(b []byte, typ uint64, encLevel protocol.Encrypt
 				frame, l, err = parseDatagramFrame(b, typ, v)
 				break
 			}
-			fallthrough
+			err = errDatagramNotNegotiated
 		default:
 			err = errors.New("unknown frame type")
 		}

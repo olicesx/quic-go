@@ -346,9 +346,22 @@ func TestFrameParsingErrorsWhenDatagramFramesAreNotSupported(t *testing.T) {
 	require.Error(t, err)
 	var transportErr *qerr.TransportError
 	require.ErrorAs(t, err, &transportErr)
-	require.Equal(t, qerr.FrameEncodingError, transportErr.ErrorCode)
+	// RFC 9221, Section 3: this is a PROTOCOL_VIOLATION, not a frame encoding error.
+	require.Equal(t, qerr.ProtocolViolation, transportErr.ErrorCode)
 	require.Equal(t, uint64(0x30), transportErr.FrameType)
-	require.Equal(t, "unknown frame type", transportErr.ErrorMessage)
+	require.Equal(t, "received DATAGRAM frame without datagram support", transportErr.ErrorMessage)
+}
+
+// The DATAGRAM frame type is not a valid frame type for a parser that doesn't
+// support datagrams, even when the frame is malformed.
+func TestFrameParsingErrorsWhenDatagramFramesAreNotSupportedAndTruncated(t *testing.T) {
+	parser := NewFrameParser(false)
+	_, _, err := parser.ParseNext([]byte{0x31}, protocol.Encryption1RTT, protocol.Version1)
+	require.Error(t, err)
+	var transportErr *qerr.TransportError
+	require.ErrorAs(t, err, &transportErr)
+	require.Equal(t, qerr.ProtocolViolation, transportErr.ErrorCode)
+	require.Equal(t, uint64(0x31), transportErr.FrameType)
 }
 
 func TestFrameParsingErrorsOnInvalidType(t *testing.T) {

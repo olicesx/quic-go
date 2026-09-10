@@ -2862,3 +2862,80 @@ func TestConnectionEarlyClose(t *testing.T) {
 		t.Fatal("timeout")
 	}
 }
+
+// A connection whose run loop fails before the send queue is started
+// (StartHandshake or the initial handshake-event processing) is finalized by
+// abortAfterStartupFailure: the crypto handler and the tracer are closed, the
+// connection is closed without sending, and the send queue is left alone
+// (closing it would wait for Run to exit, which never happened).
+func TestConnectionAbortAfterStartupFailure(t *testing.T) {
+	mockCtrl := gomock.NewController(t)
+	testErr := errors.New("handshake start failed")
+	cryptoSetup := mocks.NewMockCryptoSetup(mockCtrl)
+	cryptoSetup.EXPECT().StartHandshake(gomock.Any()).Return(testErr)
+	cryptoSetup.EXPECT().Close()
+	tr, tracer := mocklogging.NewMockConnectionTracer(mockCtrl)
+	gomock.InOrder(
+		tracer.EXPECT().ClosedConnection(testErr),
+		tracer.EXPECT().Close(),
+	)
+	// The send queue is never started: any call to it (in particular Close)
+	// is a deadlock, and fails this test.
+	sender := NewMockSender(mockCtrl)
+
+	tc := newServerTestConnection(t, mockCtrl, nil, false,
+		connectionOptCryptoSetup(cryptoSetup),
+		connectionOptTracer(tr),
+		connectionOptSender(sender),
+	)
+	tc.connRunner.EXPECT().Remove(gomock.Any()).AnyTimes() // connIDGenerator.RemoveAll
+
+	require.EqualError(t, tc.conn.run(), testErr.Error())
+	// The connection context is cancelled. Note that its cause is not the
+	// startup error: run's deferred cancel runs with its own (unset) local
+	// closeErr, so context.Cause reports context.Canceled.
+	require.ErrorIs(t, tc.conn.Context().Err(), context.Canceled)
+}
+
+// StartHandshake failing leaves the connection unusable: it doesn't accept
+// packets, and the handshake never completes.
+func TestConnectionAbortAfterStartupFailureLeavesConnectionUnusable(t *testing.T) {
+	mockCtrl := gomock.NewController(t)
+	testErr := errors.New("handshake start failed")
+	cryptoSetup := mocks.NewMockCryptoSetup(mockCtrl)
+	cryptoSetup.EXPECT().StartHandshake(gomock.Any()).Return(testErr)
+	cryptoSetup.EXPECT().Close()
+
+	tc := newServerTestConnection(t, mockCtrl, nil, false,
+		connectionOptCryptoSetup(cryptoSetup),
+		connectionOptSender(NewMockSender(mockCtrl)),
+	)
+	tc.connRunner.EXPECT().Remove(gomock.Any()).AnyTimes() // connIDGenerator.RemoveAll
+
+	require.EqualError(t, tc.conn.run(), testErr.Error())
+	select {
+	case <-tc.conn.HandshakeComplete():
+		t.Fatal("handshake must not complete")
+	default:
+	}
+	// Packets queued before the failure are drained, and not processed.
+	tc.conn.handlePacket(receivedPacket{})
+}
+
+// Receiving a DATAGRAM frame on a connection that didn't advertise datagram
+// support is a connection error of type PROTOCOL_VIOLATION (RFC 9221,
+// Section 3), with the frame type set.
+func TestConnectionRejectsDatagramFramesWithoutSupport(t *testing.T) {
+	mockCtrl := gomock.NewController(t)
+	tc := newServerTestConnection(t, mockCtrl, nil, false)
+	require.False(t, tc.conn.config.EnableDatagrams)
+
+	b, err := (&wire.DatagramFrame{Data: []byte("foobar")}).Append(nil, protocol.Version1)
+	require.NoError(t, err)
+	_, err = tc.conn.handleFrames(b, protocol.ConnectionID{}, protocol.Encryption1RTT, nil, time.Now())
+	var transportErr *qerr.TransportError
+	require.ErrorAs(t, err, &transportErr)
+	require.Equal(t, qerr.ProtocolViolation, transportErr.ErrorCode)
+	require.Equal(t, uint64(0x30), transportErr.FrameType)
+	require.Equal(t, "received DATAGRAM frame without datagram support", transportErr.ErrorMessage)
+}

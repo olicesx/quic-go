@@ -190,7 +190,11 @@ type connection struct {
 	// pacingDeadline is the time when the next packet should be sent
 	pacingDeadline time.Time
 
-	peerParams *wire.TransportParameters
+	// peerParams are the peer's transport parameters.
+	// Written on the handshake goroutine (and on the client's 0-RTT restore),
+	// read from the application goroutine (e.g. when opening a stream or
+	// sending a DATAGRAM frame), so access is atomic.
+	peerParams atomic.Pointer[wire.TransportParameters]
 
 	timer connectionTimer
 	// keepAlivePingSent stores whether a keep alive PING is in flight.
@@ -707,7 +711,7 @@ func (s *connection) Context() context.Context {
 }
 
 func (s *connection) supportsDatagrams() bool {
-	return s.peerParams.MaxDatagramFrameSize > 0
+	return s.peerParams.Load().MaxDatagramFrameSize > 0
 }
 
 func (s *connection) ConnectionState() ConnectionState {
@@ -1768,7 +1772,7 @@ func (s *connection) restoreTransportParameters(params *wire.TransportParameters
 		s.logger.Debugf("Restoring Transport Parameters: %s", params)
 	}
 
-	s.peerParams = params
+	s.peerParams.Store(params)
 	s.connIDGenerator.SetMaxActiveConnIDs(params.ActiveConnectionIDLimit)
 	s.connFlowController.UpdateSendWindow(params.InitialMaxData)
 	s.streamsMap.UpdateLimits(params)
@@ -1788,14 +1792,14 @@ func (s *connection) handleTransportParameters(params *wire.TransportParameters)
 		}
 	}
 
-	if s.perspective == protocol.PerspectiveClient && s.peerParams != nil && s.ConnectionState().Used0RTT && !params.ValidForUpdate(s.peerParams) {
+	if peerParams := s.peerParams.Load(); s.perspective == protocol.PerspectiveClient && peerParams != nil && s.ConnectionState().Used0RTT && !params.ValidForUpdate(peerParams) {
 		return &qerr.TransportError{
 			ErrorCode:    qerr.ProtocolViolation,
 			ErrorMessage: "server sent reduced limits after accepting 0-RTT data",
 		}
 	}
 
-	s.peerParams = params
+	s.peerParams.Store(params)
 	// On the client side we have to wait for handshake completion.
 	// During a 0-RTT connection, we are only allowed to use the new transport parameters for 1-RTT packets.
 	if s.perspective == protocol.PerspectiveServer {
@@ -1842,7 +1846,7 @@ func (s *connection) checkTransportParameters(params *wire.TransportParameters) 
 }
 
 func (s *connection) applyTransportParameters() {
-	params := s.peerParams
+	params := s.peerParams.Load()
 	// Our local idle timeout will always be > 0.
 	s.idleTimeout = s.config.MaxIdleTimeout
 	// If the peer advertised an idle timeout, take the minimum of the values.
@@ -2361,12 +2365,15 @@ func (s *connection) OpenUniStreamSync(ctx context.Context) (SendStream, error) 
 }
 
 func (s *connection) newFlowController(id protocol.StreamID) flowcontrol.StreamFlowController {
-	initialSendWindow := s.peerParams.InitialMaxStreamDataUni
+	// This is called from the application goroutine, while the peer's transport
+	// parameters are written on the handshake goroutine.
+	peerParams := s.peerParams.Load()
+	initialSendWindow := peerParams.InitialMaxStreamDataUni
 	if id.Type() == protocol.StreamTypeBidi {
 		if id.InitiatedBy() == s.perspective {
-			initialSendWindow = s.peerParams.InitialMaxStreamDataBidiRemote
+			initialSendWindow = peerParams.InitialMaxStreamDataBidiRemote
 		} else {
-			initialSendWindow = s.peerParams.InitialMaxStreamDataBidiLocal
+			initialSendWindow = peerParams.InitialMaxStreamDataBidiLocal
 		}
 	}
 	return flowcontrol.NewStreamFlowController(
@@ -2451,8 +2458,10 @@ func (s *connection) SendDatagram(p []byte) error {
 	// ACK bookkeeping reads it. An independently owned frame and payload
 	// are garbage-collected once the packet and queue release them.
 	probe := &wire.DatagramFrame{DataLenPresent: true}
+	// This is called from the application goroutine, while the peer's transport
+	// parameters are written on the handshake goroutine.
 	maxDataLen := min(
-		probe.MaxDataLen(s.peerParams.MaxDatagramFrameSize, s.version),
+		probe.MaxDataLen(s.peerParams.Load().MaxDatagramFrameSize, s.version),
 		protocol.ByteCount(s.maxPayloadSizeEstimate.Load()),
 	)
 	if protocol.ByteCount(len(p)) > maxDataLen {
