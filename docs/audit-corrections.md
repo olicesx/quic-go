@@ -80,3 +80,35 @@ and are recorded here so they can be carried into the commit messages:
 | `http3`: `PUSH_PROMISE` (P3-41) | skipped silently | connection error of type `H3_ID_ERROR` on a request stream, `H3_FRAME_UNEXPECTED` on the control stream |
 | `quic`: unnegotiated `DATAGRAM` frames (P3-58) | a DATAGRAM frame received with datagram support disabled was reported as `INTERNAL_ERROR` | connection error of type `PROTOCOL_VIOLATION` with the frame type set (RFC 9221, Section 3) |
 | `quic`: truncated shutdown (P1-9) | a stream closed for connection shutdown reported `io.EOF`, silently dropping unread bytes | it reports the shutdown error; a stream that already reached its natural end still reports `io.EOF` |
+
+## Declared semantic change: an HTTP/3 request with a body is only retried when `Request.GetBody` can reconstruct it (P2-15)
+
+The retry row above is the diff-level summary. This is the caller-visible rule it
+implies, stated on its own because it changes what consumers have to set on their
+requests.
+
+`961173fa` ("fix(http3): keep reading the control stream, honour GOAWAY, and gate
+request replay") replaced the old retry trigger in `http3/transport.go`. Retrying
+is no longer driven by the error being a `net.Error` timeout on a reused
+connection; `canRetryRequest` now decides by what is provably safe:
+
+- the stream was never established (`errConnUnusable`) — the request provably was
+  not processed, so it is retried unchanged, with or without a body;
+- the server refused the request with `H3_REQUEST_REJECTED` — the request is
+  retried only if `req.Body` is nil or `http.NoBody`, or if `req.GetBody`
+  reconstructs the body. Otherwise `RoundTrip` returns
+
+  ```
+  http3: Transport: cannot retry err [...]: ... define Request.GetBody to avoid this error
+  ```
+
+  instead of sending the request again;
+- anything else — including a connection that failed while the request was in
+  flight — is not retried, and the original error is returned.
+
+Consumers must therefore set `Request.GetBody` on every request that carries a
+body and may be sent over a pooled HTTP/3 connection. What that replaces is worse
+than the error: a request replayed on a dead connection was sent a second time
+with a zero-length body while `Content-Length` still described the original body,
+so the peer received a truncated request that looked well-formed.
+
