@@ -33,6 +33,23 @@ jobs:
       - name: Run code generators
         if: success() || failure() # run this step even if the previous one failed
         run: .github/workflows/go-generate.sh
+      - name: Check that integrationtests/gomodvendor is tidied
+        if: success() || failure() # run this step even if the previous one failed
+        # integrationtests/gomodvendor is a separate module replacing quic-go with
+        # ../../, so MVS resolves its requirements (qpack and everything else)
+        # against the versions the root go.mod requires. A dependency bump in the
+        # root module therefore invalidates its go.mod/go.sum, and leaving it stale
+        # has broken this job twice (854e723f, 1dea40d2), both times surfaced only
+        # as the next step's opaque "updates to go.mod needed". `go mod tidy -diff`
+        # (Go 1.23+) applies the same consistency check as that vendor step without
+        # modifying the checkout, and prints the change that is missing.
+        run: |
+          cd integrationtests/gomodvendor
+          if ! go mod tidy -diff; then
+            echo "::error::integrationtests/gomodvendor is not tidied: its go.mod/go.sum don't match what the toolchain computes for the current pins (a dependency bump in the root go.mod is the usual cause)."
+            echo "Fix: (cd integrationtests/gomodvendor && go mod tidy) and commit go.mod and go.sum - the change to apply is printed above."
+            exit 1
+          fi
       - name: Check that go mod vendor works
         if: success() || failure() # run this step even if the previous one failed
         run: |
