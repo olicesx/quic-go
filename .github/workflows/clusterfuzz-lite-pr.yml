@@ -3,6 +3,11 @@ on:
   pull_request:
     paths:
       - '**'
+  # The fuzz targets live in this repo: a broken build script or target must be
+  # visible on pushes as well, since the PR workflow only runs on pull requests.
+  push:
+    paths:
+      - '**'
 
 permissions: read-all
 jobs:
@@ -19,7 +24,7 @@ jobs:
     steps:
     - name: Build Fuzzers (${{ matrix.sanitizer }})
       id: build
-      uses: google/clusterfuzzlite/actions/build_fuzzers@v1
+      uses: google/clusterfuzzlite/actions/build_fuzzers@884713a6c30a92e5e8544c39945cd7cb630abcd1 # v1
       with:
         language: go
         github-token: ${{ secrets.GITHUB_TOKEN }}
@@ -32,7 +37,7 @@ jobs:
         # storage-repo-branch-coverage: gh-pages  # Optional. Defaults to "gh-pages".
     - name: Run Fuzzers (${{ matrix.sanitizer }})
       id: run
-      uses: google/clusterfuzzlite/actions/run_fuzzers@v1
+      uses: google/clusterfuzzlite/actions/run_fuzzers@884713a6c30a92e5e8544c39945cd7cb630abcd1 # v1
       with:
         github-token: ${{ secrets.GITHUB_TOKEN }}
         fuzz-seconds: 480

@@ -1,5 +1,9 @@
 on: [push, pull_request, workflow_dispatch]
 
+# The workflows only read the repository contents.
+permissions:
+  contents: read
+
 jobs:
   integration:
     strategy:
@@ -32,8 +36,8 @@ jobs:
       TIMESCALE_FACTOR: 3
     name: "Integration (${{ matrix.os }}, Go ${{ matrix.go }}${{ matrix.race && ', race' || '' }}${{ matrix.use32bit && ', 32-bit' || '' }})"
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version: ${{ matrix.go }}
       - name: Set qlogger
@@ -71,7 +75,7 @@ jobs:
         run: go test -v -run=^$ -timeout 5m -shuffle=on -bench=. ./integrationtests/self
       - name: save qlogs
         if: ${{ always() && env.DEBUG == 'true' }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: qlogs-${{ matrix.os }}-go${{ matrix.go }}-race${{ matrix.race }}${{ matrix.use32bit && '-32bit' || '' }}
           path: integrationtests/self/*.qlog

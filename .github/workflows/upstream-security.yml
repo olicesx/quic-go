@@ -10,9 +10,18 @@ permissions: read-all
 jobs:
   upstream-drift:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          # The sync ledger checks compare against the upstream history.
+          fetch-depth: 0
+
+      - name: Fetch upstream
+        run: |
+          set -euo pipefail
+          git remote add upstream https://github.com/quic-go/quic-go.git
+          git fetch --no-tags --prune upstream master
 
       - name: Fail on unreviewed security advisories
         env:
@@ -44,3 +53,94 @@ jobs:
             echo "Latest upstream release $latest has not been reviewed (recorded: $reviewed)." >&2
             exit 1
           fi
+
+      - name: Fail on pending entries in the upstream sync ledger
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          ledger=docs/upstream-sync-ledger.tsv
+
+          # every upstream release newer than the fork's base tag
+          base_tag="$(git describe --tags --abbrev=0 "$(git merge-base HEAD upstream/master)")"
+          if [[ -z "$base_tag" ]]; then
+            echo "::error::could not determine the fork's upstream base tag" >&2
+            exit 1
+          fi
+          curl --fail --silent --show-error \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/quic-go/quic-go/releases?per_page=100" \
+            | jq -r '.[].tag_name' | sort -Vu > /tmp/upstream-releases
+          pos="$(grep -n -x -F "${base_tag}" /tmp/upstream-releases | cut -d: -f1)"
+          if [[ -z "$pos" ]]; then
+            echo "::error::upstream base tag ${base_tag} not found in the upstream release list" >&2
+            exit 1
+          fi
+          tail -n "+$((pos + 1))" /tmp/upstream-releases > /tmp/releases-to-check
+
+          # every upstream security advisory
+          curl --fail --silent --show-error \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/quic-go/quic-go/security-advisories?per_page=100" \
+            | jq -r '.[].ghsa_id' | sort -u > /tmp/advisories-to-check
+
+          # an entry is satisfied by a row whose status is not "pending"
+          has_entry() {
+            local column="$1" key="$2"
+            awk -F'\t' -v c="${column}" -v k="${key}" \
+              '!/^#/ && $c == k && ($3 == "merged-targeted" || $3 == "waived") { found = 1 } END { exit !found }' \
+              "${ledger}"
+          }
+
+          failed=0
+          while read -r tag; do
+            [[ -z "$tag" ]] && continue
+            if ! has_entry 1 "$tag"; then
+              echo "::error::upstream release ${tag} (newer than ${base_tag}) has no non-pending entry in ${ledger}"
+              failed=1
+            fi
+          done < /tmp/releases-to-check
+          while read -r ghsa; do
+            [[ -z "$ghsa" ]] && continue
+            if ! has_entry 2 "$ghsa"; then
+              echo "::error::upstream advisory ${ghsa} has no non-pending entry in ${ledger}"
+              failed=1
+            fi
+          done < /tmp/advisories-to-check
+          if [[ "${failed}" -ne 0 ]]; then
+            exit 1
+          fi
+          echo "Sync ledger covers all upstream releases newer than ${base_tag} and all upstream advisories."
+
+      - name: Assert the fork is not falling further behind upstream
+        env:
+          # Ratchet: raise this as the fork catches up, never lower it silently.
+          SYNC_BEHIND_MAX: "800"
+        run: |
+          set -euo pipefail
+          base="$(git merge-base HEAD upstream/master)"
+          behind="$(git rev-list --count "${base}..upstream/master")"
+          echo "fork is ${behind} commits behind upstream/master (base ${base}, limit ${SYNC_BEHIND_MAX})"
+          if [[ "${behind}" -gt "${SYNC_BEHIND_MAX}" ]]; then
+            echo "::error::fork is ${behind} commits behind upstream/master, more than SYNC_BEHIND_MAX=${SYNC_BEHIND_MAX}"
+            exit 1
+          fi
+
+      - name: Compute the divergence from upstream
+        run: |
+          set -euo pipefail
+          base="$(git merge-base HEAD upstream/master)"
+          comm -12 \
+            <(git diff --name-only "${base}" HEAD | sort) \
+            <(git diff --name-only "${base}" upstream/master | sort) \
+            > fork-upstream-divergence.txt
+          echo "files changed on both sides since ${base}: $(wc -l < fork-upstream-divergence.txt)"
+          cat fork-upstream-divergence.txt
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: fork-upstream-divergence
+          path: fork-upstream-divergence.txt
+          if-no-files-found: error

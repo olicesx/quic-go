@@ -1,12 +1,16 @@
 on: [push, pull_request, workflow_dispatch]
 
+# The workflows only read the repository contents.
+permissions:
+  contents: read
+
 jobs:
   check:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version: "1.24.x"
       - name: Check that no non-test files import Ginkgo or Gomega
@@ -44,44 +48,67 @@ jobs:
       GOLANGCI_LINT_VERSION: v2.11.4
     name: golangci-lint (Go ${{ matrix.go }})
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version: ${{ matrix.go }}
+      - name: Install golangci-lint (built with this Go version)
+        run: go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@${{ env.GOLANGCI_LINT_VERSION }}
+      - name: Assert linter Go version >= module Go version
+        # Fail closed: a linter that's too old for the module's Go version would
+        # silently reduce analysis fidelity. Separate "tool too old" from
+        # "code violates the linter".
+        run: |
+          set -euo pipefail
+          want="go$(awk '/^go /{print $2; exit}' go.mod)"
+          got="$(golangci-lint version 2>&1 | sed -n 's/.*built with \(go[0-9.]*\).*/\1/p')"
+          if [ -z "$got" ]; then
+            echo "::error::could not determine the Go version golangci-lint was built with"
+            exit 1
+          fi
+          if [ "$(printf '%s\n%s\n' "$want" "$got" | sort -V | head -1)" != "$want" ]; then
+            echo "::error::golangci-lint built with $got < module $want (use install-mode: goinstall)"
+            exit 1
+          fi
       - name: golangci-lint (Linux)
-        uses: golangci/golangci-lint-action@v9
+        uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9
         with:
+          install-mode: goinstall
           args: --timeout=3m
           version: ${{ env.GOLANGCI_LINT_VERSION }}
       - name: golangci-lint (Windows)
         if: success() || failure() # run this step even if the previous one failed
-        uses: golangci/golangci-lint-action@v9
+        uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9
         env:
           GOOS: "windows"
         with:
+          install-mode: goinstall
           args: --timeout=3m
           version: ${{ env.GOLANGCI_LINT_VERSION }}
       - name: golangci-lint (OSX)
         if: success() || failure() # run this step even if the previous one failed
-        uses: golangci/golangci-lint-action@v9
+        uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9
         env:
           GOOS: "darwin"
         with:
+          install-mode: goinstall
           args: --timeout=3m
           version: ${{ env.GOLANGCI_LINT_VERSION }}
       - name: golangci-lint (FreeBSD)
         if: success() || failure() # run this step even if the previous one failed
-        uses: golangci/golangci-lint-action@v9
+        uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9
         env:
           GOOS: "freebsd"
         with:
+          install-mode: goinstall
           args: --timeout=3m
           version: ${{ env.GOLANGCI_LINT_VERSION }}
       - name: golangci-lint (others)
         if: success() || failure() # run this step even if the previous one failed
-        uses: golangci/golangci-lint-action@v9
+        uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9
         env:
           GOOS: "solaris" # some OS that we don't have any build tags for
         with:
+          install-mode: goinstall
           args: --timeout=3m
           version: ${{ env.GOLANGCI_LINT_VERSION }}

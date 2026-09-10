@@ -1,0 +1,50 @@
+# Upstream sync ledger for github.com/quic-go/quic-go.
+#
+# One row per upstream release and per upstream security advisory.
+# Tab separated: release <TAB> ghsa <TAB> status <TAB> fork-commit-or-pr <TAB> reason
+#
+# status:
+#   merged-targeted  the upstream change is already in this fork, or a fork
+#                    commit / pull request targeting it exists (recorded in
+#                    column 4)
+#   waived           consciously not taken; column 5 records the posture and
+#                    the residual risk
+#   pending          not decided yet
+#
+# .github/workflows/upstream-security.yml fails if an upstream release newer
+# than the fork's base tag, or any upstream security advisory, has no row with
+# a status other than "pending".
+#
+# Source of the release list: the upstream "releases" API (releases without a
+# GitHub release object, e.g. the v0.49.1 and v0.54.1 tags, are not listed).
+# Source of the advisory list: the upstream "security-advisories" API.
+#
+# The fork is based on v0.49.0 (c385cd10). Rebase is tracked separately
+# (P2-16 Phase 1); this ledger only records the disposition of each item.
+#release	ghsa	status	fork-commit-or-pr	reason
+v0.49.0		merged-targeted	c385cd10	fork base; every earlier release is inherited through it
+v0.50.0		waived		no rebase yet: fork is frozen at v0.49.0; rebase tracked as P2-16 Phase 1
+v0.50.1		waived		no rebase yet: fork is frozen at v0.49.0; rebase tracked as P2-16 Phase 1
+v0.51.0		waived		no rebase yet: fork is frozen at v0.49.0; rebase tracked as P2-16 Phase 1
+v0.52.0		waived		no rebase yet: fork is frozen at v0.49.0; rebase tracked as P2-16 Phase 1
+v0.53.0		waived		no rebase yet: fork is frozen at v0.49.0; rebase tracked as P2-16 Phase 1
+v0.54.0		waived		no rebase yet: fork is frozen at v0.49.0; rebase tracked as P2-16 Phase 1
+v0.55.0		waived		no rebase yet: fork is frozen at v0.49.0; rebase tracked as P2-16 Phase 1
+v0.56.0		waived		no rebase yet: fork is frozen at v0.49.0; rebase tracked as P2-16 Phase 1
+v0.57.0		waived		no rebase yet: fork is frozen at v0.49.0; rebase tracked as P2-16 Phase 1
+v0.57.1		waived		no rebase yet: fork is frozen at v0.49.0; rebase tracked as P2-16 Phase 1
+v0.58.0		waived		no rebase yet: fork is frozen at v0.49.0; rebase tracked as P2-16 Phase 1
+v0.58.1		waived		no rebase yet: fork is frozen at v0.49.0; rebase tracked as P2-16 Phase 1
+v0.59.0		waived		no rebase yet: fork is frozen at v0.49.0; rebase tracked as P2-16 Phase 1
+v0.59.1		waived		no rebase yet: fork is frozen at v0.49.0; rebase tracked as P2-16 Phase 1
+v0.60.0		waived		no rebase yet: fork is frozen at v0.49.0; rebase tracked as P2-16 Phase 1
+v0.61.0		waived	fix/audit-20260907 (uncommitted)	partial backport only: P2-14 (read the control stream, surface GOAWAY) and P2-15 (canRetryRequest retry semantics); the rest of v0.61.0 is not ported
+v0.62.0		waived		no rebase yet: fork is frozen at v0.49.0; rebase tracked as P2-16 Phase 1
+	GHSA-3q6m-v84f-6p9h	merged-targeted	c385cd10	fixed upstream in v0.38.0, long before the fork base v0.49.0
+	GHSA-ppxx-5m9h-6vxf	merged-targeted	c385cd10	fixed upstream in v0.40.1, long before the fork base v0.49.0
+	GHSA-c33x-xqrf-c478	merged-targeted	c385cd10	fixed upstream in v0.42.0, long before the fork base v0.49.0
+	GHSA-px8v-pp82-rcvr	merged-targeted	c385cd10	fixed upstream in v0.48.1, before the fork base v0.49.0
+	GHSA-j972-j939-p2v3	merged-targeted	c385cd10	not affected: the vulnerable release is v0.50.0, the fork is based on v0.49.0
+	GHSA-47m2-4cr7-mhcw	merged-targeted	0d8eb622	backported: handshake-confirmation key discard with an idempotence guard (reviewed 2026-08-28, docs/upstream-security.md)
+	GHSA-g754-hx8w-x2g6	merged-targeted	0d8eb622 fbf90cb0	backported: qpack v0.6 incremental decoding and decoded field-section limits (reviewed 2026-08-28, docs/upstream-security.md)
+	GHSA-vvgj-x9jq-8cj9	merged-targeted	0d8eb622 fbf90cb0	backported: the same decoded field-section limit is enforced for response and request trailers (reviewed 2026-08-28, docs/upstream-security.md)

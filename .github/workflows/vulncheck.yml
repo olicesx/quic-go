@@ -1,0 +1,99 @@
+name: Vulnerability check
+
+on:
+  pull_request:
+    paths:
+      - go.mod
+      - go.sum
+  schedule:
+    - cron: "23 6 * * 1"
+  workflow_dispatch:
+
+# The workflow only reads the repository contents.
+permissions:
+  contents: read
+
+jobs:
+  govulncheck:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+
+      - name: Install govulncheck
+        # Build govulncheck with this module's Go version: a prebuilt binary
+        # built with an older Go can't analyze a newer module (see P2-18).
+        run: go install golang.org/x/vuln/cmd/govulncheck@latest
+
+      - name: List the scanned modules and versions
+        run: go list -m -f '{{.Path}} {{.Version}}' all | tee scanned-modules.txt
+
+      - name: Run govulncheck
+        run: |
+          set -euo pipefail
+          govulncheck -format json ./... > govulncheck.json
+          # Print every vulnerability that affects a module in this build,
+          # including the ones that are not reachable from this code.
+          jq -s -r '
+            [ .[] | select(.finding) | .finding | {id: .osv, fixed: (.fixed_version // "-")} ]
+            | unique_by(.id)
+            | .[] | "\(.id) fixed-in=\(.fixed)"' govulncheck.json > reported-vulnerabilities.txt
+          echo "govulncheck reported $(wc -l < reported-vulnerabilities.txt) vulnerabilities:"
+          cat reported-vulnerabilities.txt
+
+      - name: Check the waivers
+        run: |
+          set -euo pipefail
+          waivers=.github/vulncheck-waivers.txt
+
+          # Findings that govulncheck traces into code in this repository.
+          jq -s -r '
+            [ .[] | select(.finding) | .finding
+              | select((.trace // []) | any((.function // "") != "" or (.package // "") != ""))
+              | .osv ]
+            | unique | .[]' govulncheck.json > reachable-vulnerabilities.txt
+          echo "reachable in this repository: $(wc -l < reachable-vulnerabilities.txt)"
+          cat reachable-vulnerabilities.txt
+
+          failed=0
+          today="$(date -u +%F)"
+          # expired waivers
+          while read -r id reason expiry; do
+            [[ -z "${id}" || "${id}" == \#* ]] && continue
+            if [[ ! "${expiry}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
+              echo "::error::malformed waiver for ${id}: expiry '${expiry}' is not YYYY-MM-DD"
+              failed=1
+              continue
+            fi
+            if [[ "${expiry}" < "${today}" ]]; then
+              echo "::error::waiver for ${id} expired on ${expiry}"
+              failed=1
+            fi
+          done < "${waivers}"
+
+          # unwaived reachable findings
+          while read -r id; do
+            [[ -z "${id}" ]] && continue
+            if ! grep -qE "^${id}[[:space:]]" "${waivers}"; then
+              echo "::error::${id} is reachable in this repository and has no waiver in ${waivers}"
+              failed=1
+            fi
+          done < reachable-vulnerabilities.txt
+          if [[ "${failed}" -ne 0 ]]; then
+            exit 1
+          fi
+          echo "All reachable vulnerabilities are covered by a non-expired waiver."
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: ${{ !cancelled() }}
+        with:
+          name: govulncheck
+          path: |
+            govulncheck.json
+            scanned-modules.txt
+            reported-vulnerabilities.txt
+            reachable-vulnerabilities.txt
+          if-no-files-found: warn
