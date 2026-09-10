@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/olicesx/quic-go/internal/protocol"
 	"github.com/stretchr/testify/require"
@@ -49,4 +50,42 @@ func TestWritingStopping(t *testing.T) {
 
 		require.Contains(t, logBuf.String(), "writer full")
 	})
+}
+
+// blockingWriter blocks until release is closed.
+type blockingWriter struct {
+	release chan struct{}
+}
+
+func (w *blockingWriter) Write(p []byte) (int, error) {
+	<-w.release
+	return len(p), nil
+}
+
+func (w *blockingWriter) Close() error { return nil }
+
+// Recording an event must never block the caller (the connection's hot path):
+// if the writer can't keep up, events are dropped and counted.
+func TestWriterDropsEventsWhenTheWriterIsBlocked(t *testing.T) {
+	blocked := &blockingWriter{release: make(chan struct{})}
+	tr := &trace{
+		VantagePoint: vantagePoint{Type: "transport"},
+		CommonFields: commonFields{ReferenceTime: time.Now()},
+	}
+	w := newWriter(blocked, tr)
+	go w.Run()
+	// The Run goroutine is blocked writing the header, so the event channel
+	// fills up and every further event is dropped.
+	for i := 0; i < eventChanSize+1; i++ {
+		w.RecordEvent(time.Now(), &eventGeneric{name: "test", msg: "test"})
+	}
+	require.Equal(t, uint64(1), w.DroppedEvents())
+
+	// Capture the log output of Close.
+	var logBuf bytes.Buffer
+	log.SetOutput(&logBuf)
+	defer log.SetOutput(os.Stdout)
+	close(blocked.release)
+	w.Close()
+	require.Contains(t, logBuf.String(), "dropped 1 events")
 }
