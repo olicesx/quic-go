@@ -1033,18 +1033,36 @@ func TestSentPacketHandlerECN(t *testing.T) {
 	pns[1] = sendPacket(now, protocol.ECT0)
 	pns[2] = sendPacket(now, protocol.ECT0)
 	pns[3] = sendPacket(now, protocol.ECT0)
-	// Give the RTT sample a real value (~10ms): with a sub-millisecond
-	// RTT the loss threshold collapses to the 1ms timer granularity and
-	// pns[1] (sent a full second after pns[0]) can be spuriously declared
-	// lost on a loaded machine, producing a second congestion event.
-	time.Sleep(10 * time.Millisecond)
+	// Note that every timestamp in this test is synthetic: the send times are
+	// passed to SentPacket and the ACK's receive time is passed to
+	// ReceivedAck, and sentPacketHandler never reads the real clock (it has no
+	// time.Now call). The RTT sample is therefore always exactly 100ms, no
+	// matter how loaded the machine is, and lossDelay is 9/8 * 100ms =
+	// 112.5ms (RFC 9002, section 6.1.2). pns[0], sent a full second before the
+	// others, is always declared lost by the time threshold.
+	// A time.Sleep(10ms) used to sit here to "give the RTT sample a real
+	// value"; it was removed after verifying that it cannot influence any of
+	// these values (see the commit message).
 
 	// Receive an ACK with a short RTT, such that the first packet is lost.
-	// Record congestion events instead of expecting exact call counts: on a
-	// loaded runner the loss threshold can collapse to the 1ms timer
-	// granularity and spuriously declare pns[1] lost as well, producing an
-	// extra OnCongestionEvent / LostPacket call that a strict expectation
-	// would reject. The final assertion below checks the call that matters.
+	// Record congestion events instead of expecting exact call counts: the
+	// application data packet number generator skips one packet number at
+	// random (skippingPacketNumberGenerator: the first skip is
+	// next + 3 + rand(0..511) with SkipPacketInitialPeriod = 256, and it never
+	// skips two numbers in a row). 0-RTT and 1-RTT share the application data
+	// packet number space, so the 0-RTT packet above consumes packet number 0
+	// and the four packets below are normally 1, 2, 3, 4. If that first skip
+	// lands on 3 or 4, they are 1, 2, 4, 5 or 1, 2, 3, 5 instead. The ACK
+	// below has largest acked = pns[3], so in those rounds largest acked is at
+	// least pns[1]+3, which trips the reordering threshold in
+	// detectLostPackets (packetThreshold = 3, RFC 9002, section 6.1.1) and
+	// declares pns[1] lost as well - not the time threshold, which pns[1]
+	// misses by 12.5ms - producing an extra OnCongestionEvent / LostPacket
+	// call that a strict expectation would reject. To reproduce, force the
+	// first skip onto 3 or 4 (e.g. set SkipPacketInitialPeriod to 1); it lands
+	// there by chance with probability 2/512. That loss is legitimate, not a
+	// bug - it made this assertion fail on CI with "expected [1], actual
+	// [1, 2]". The final assertion below checks the call that matters.
 	var congEvents []protocol.PacketNumber
 	cong.EXPECT().OnCongestionEvent(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(
 		func(pn protocol.PacketNumber, _, _ protocol.ByteCount) {
