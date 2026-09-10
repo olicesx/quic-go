@@ -1069,7 +1069,19 @@ func TestSentPacketHandlerECN(t *testing.T) {
 		now.Add(100*time.Millisecond),
 	)
 	require.NoError(t, err)
-	require.Equal(t, []protocol.PacketNumber{pns[0]}, packets.Lost)
+	// pns[0] must be the first packet declared lost: it was sent a full second
+	// before the others, so the time threshold always reaches it first.
+	// pns[1] may be declared lost as well: the application data packet number
+	// generator skips a number at random (SkipPacketInitialPeriod), and if the
+	// first skip lands on pns[2] or pns[3], the ACK's largest acked ends up at
+	// least 3 above pns[1], which trips the reordering threshold in
+	// detectLostPackets. That loss is legitimate, not a bug - it made this
+	// assertion fail on CI with "expected [1], actual [1, 2]".
+	// The tolerance is bounded to exactly those two packets: any other packet
+	// declared lost still fails the test.
+	require.NotEmpty(t, packets.Lost)
+	require.Equal(t, pns[0], packets.Lost[0])
+	require.Subset(t, []protocol.PacketNumber{pns[0], pns[1]}, packets.Lost)
 
 	// The second packet is still outstanding.
 	// Receive a (delayed) ACK for it.
