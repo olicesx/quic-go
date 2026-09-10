@@ -68,8 +68,8 @@ func newStream(str quic.Stream, conn *connection, datagrams *datagrammer, parseT
 
 func (s *stream) Read(b []byte) (int, error) {
 	fp := &frameParser{
-		r:    s.Stream,
-		conn: s.conn,
+		r:         s.Stream,
+		closeConn: s.conn.CloseWithError,
 	}
 	if s.bytesRemainingInFrame == 0 {
 	parseLoop:
@@ -203,7 +203,7 @@ func (s *requestStream) SendRequestHeader(req *http.Request) error {
 
 func (s *requestStream) ReadResponse() (*http.Response, error) {
 	fp := &frameParser{
-		conn: s.conn,
+		closeConn: s.conn.CloseWithError,
 		r: &tracingReader{
 			Reader: s.Stream,
 			first:  &s.firstByte,

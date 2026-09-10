@@ -7,14 +7,15 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/olicesx/quic-go"
 	mockquic "github.com/olicesx/quic-go/internal/mocks/quic"
 	"github.com/olicesx/quic-go/internal/protocol"
-	"github.com/olicesx/quic-go/internal/qerr"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/mock/gomock"
 )
@@ -256,28 +257,62 @@ func TestTransportConnectionReuse(t *testing.T) {
 // Requests reuse the same underlying QUIC connection.
 // If a request experiences an error, the behavior depends on the nature of that error.
 func TestTransportConnectionRedial(t *testing.T) {
-	// If it's connection error that is a timeout error, we re-dial a new connection.
-	// No error will be returned to the caller.
-	t.Run("timeout error", func(t *testing.T) {
-		testTransportConnectionRedial(t, true, &qerr.IdleTimeoutError{}, nil)
+	// io.NopCloser hides the concrete type of the reader, so http.NewRequest
+	// doesn't set GetBody.
+	nonRetryableReq := mustNewRequest("GET", "https://quic-go.org", io.NopCloser(strings.NewReader("foobar")))
+	require.Nil(t, nonRetryableReq.GetBody)
+
+	retryableReq := nonRetryableReq.Clone(context.Background())
+	retryableReq.GetBody = func() (io.ReadCloser, error) {
+		return io.NopCloser(strings.NewReader("foobaz")), nil
+	}
+
+	// If the error occurs when opening the stream, it is safe to retry the request:
+	// We can be certain that it wasn't sent out (not even partially).
+	t.Run("error when opening the stream", func(t *testing.T) {
+		require.NoError(t,
+			testTransportConnectionRedial(t, nonRetryableReq, &errConnUnusable{errors.New("test")}, "foobar", true),
+		)
 	})
 
-	// If it's a different connection error, the error is returned to the caller.
-	// The connection is not redialed.
-	t.Run("other error from the connection", func(t *testing.T) {
-		testErr := &quic.TransportError{ErrorCode: quic.ConnectionIDLimitError}
-		testTransportConnectionRedial(t, true, testErr, testErr)
+	t.Run("non-retryable request error after opening the stream", func(t *testing.T) {
+		require.ErrorIs(t,
+			testTransportConnectionRedial(t, nonRetryableReq, assert.AnError, "foobar", false),
+			assert.AnError,
+		)
 	})
 
-	// If the error is not related to the connection, we return that error.
-	// The underlying connection remains open and is reused for subsequent requests.
-	t.Run("other error not from the connection", func(t *testing.T) {
-		testErr := &quic.TransportError{ErrorCode: quic.ConnectionIDLimitError}
-		testTransportConnectionRedial(t, false, testErr, testErr)
+	t.Run("retryable request after opening the stream", func(t *testing.T) {
+		require.ErrorIs(t,
+			testTransportConnectionRedial(t, retryableReq, assert.AnError, "", false),
+			assert.AnError,
+		)
+	})
+
+	t.Run("retryable request after H3_REQUEST_REJECTED", func(t *testing.T) {
+		require.NoError(t,
+			testTransportConnectionRedial(t,
+				retryableReq,
+				&Error{ErrorCode: ErrCodeRequestRejected},
+				"foobaz",
+				true,
+			),
+		)
+	})
+
+	t.Run("retryable request where GetBody returns an error", func(t *testing.T) {
+		req := nonRetryableReq.Clone(context.Background())
+		req.GetBody = func() (io.ReadCloser, error) {
+			return nil, assert.AnError
+		}
+		require.ErrorIs(t,
+			testTransportConnectionRedial(t, req, &Error{ErrorCode: ErrCodeRequestRejected}, "", false),
+			assert.AnError,
+		)
 	})
 }
 
-func testTransportConnectionRedial(t *testing.T, connClosed bool, roundtripErr, expectedErr error) {
+func testTransportConnectionRedial(t *testing.T, req *http.Request, roundtripErr error, expectedBody string, expectRedial bool) error {
 	mockCtrl := gomock.NewController(t)
 	cl := NewMockClientConn(mockCtrl)
 	conn := mockquic.NewMockEarlyConnection(mockCtrl)
@@ -293,47 +328,56 @@ func testTransportConnectionRedial(t *testing.T, connClosed bool, roundtripErr, 
 		newClientConn: func(quic.EarlyConnection) clientConn { return cl },
 	}
 
-	// the first request succeeds
-	req1 := mustNewRequest("GET", "https://quic-go.net/file1.html", nil)
-	cl.EXPECT().RoundTrip(req1).Return(&http.Response{Request: req1}, nil)
-	rsp, err := tr.RoundTrip(req1)
-	require.NoError(t, err)
-	require.Equal(t, req1, rsp.Request)
-	require.Equal(t, 1, dialCount)
+	var body string
+	cl.EXPECT().RoundTrip(req).Return(nil, roundtripErr)
+	if expectRedial {
+		cl.EXPECT().RoundTrip(gomock.Any()).DoAndReturn(func(r *http.Request) (*http.Response, error) {
+			b, err := io.ReadAll(r.Body)
+			if err != nil {
+				t.Fatalf("reading body failed: %v", err)
+			}
+			body = string(b)
+			return &http.Response{Request: req}, nil
+		})
+	}
 
-	// the second request reuses the QUIC connection, and encounters an error
-	req2 := mustNewRequest("GET", "https://quic-go.net/file2.html", nil)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	if connClosed {
-		cancel()
-	}
-	conn.EXPECT().Context().Return(ctx)
-	cl.EXPECT().RoundTrip(req2).Return(nil, roundtripErr)
-	if expectedErr == nil {
-		cl.EXPECT().RoundTrip(req2).Return(&http.Response{Request: req2}, nil)
-	}
-	rsp, err = tr.RoundTrip(req2)
-	if expectedErr == nil {
-		require.NoError(t, err)
-		require.Equal(t, req2, rsp.Request)
-		require.Equal(t, 2, dialCount)
-	} else {
-		require.ErrorIs(t, err, expectedErr)
+	_, err := tr.RoundTrip(req)
+	if !expectRedial {
 		require.Equal(t, 1, dialCount)
+	} else {
+		require.Equal(t, 2, dialCount)
+		require.Equal(t, expectedBody, body)
+	}
+	return err
+}
+
+// The request is retried at most once, even if the connection it was retried
+// on turns out to be unusable as well.
+func TestTransportConnectionRedialRetriesOnlyOnce(t *testing.T) {
+	mockCtrl := gomock.NewController(t)
+	cl := NewMockClientConn(mockCtrl)
+	conn := mockquic.NewMockEarlyConnection(mockCtrl)
+	handshakeChan := make(chan struct{})
+	close(handshakeChan)
+	conn.EXPECT().HandshakeComplete().Return(handshakeChan).AnyTimes()
+	var dialCount int
+	tr := &Transport{
+		Dial: func(context.Context, string, *tls.Config, *quic.Config) (quic.EarlyConnection, error) {
+			dialCount++
+			return conn, nil
+		},
+		newClientConn: func(quic.EarlyConnection) clientConn { return cl },
 	}
 
-	// if the error was not a connection error, the next request reuses the connection
-	if connClosed {
-		return
-	}
-	currentDialCount := dialCount
-	req3 := mustNewRequest("GET", "https://quic-go.net/file3.html", nil)
-	cl.EXPECT().RoundTrip(req3).Return(&http.Response{Request: req3}, nil)
-	rsp, err = tr.RoundTrip(req3)
-	require.NoError(t, err)
-	require.Equal(t, req3, rsp.Request)
-	require.Equal(t, currentDialCount, dialCount) // no new connection was dialed
+	req := mustNewRequest("GET", "https://quic-go.net/file1.html", nil)
+	// The connection is unusable (e.g. the server sent a GOAWAY frame):
+	// the first attempt is retried on a new connection...
+	cl.EXPECT().RoundTrip(req).Return(nil, &errConnUnusable{e: errGoAway}).Times(2)
+
+	_, err := tr.RoundTrip(req)
+	// ... but the retry is not retried again.
+	require.ErrorIs(t, err, errGoAway)
+	require.Equal(t, 2, dialCount)
 }
 
 func TestTransportRequestContextCancellation(t *testing.T) {

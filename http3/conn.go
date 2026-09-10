@@ -39,6 +39,9 @@ type Connection interface {
 	Settings() *Settings
 }
 
+// invalidStreamID is a stream ID that is invalid. The first valid stream ID in QUIC is 0.
+const invalidStreamID = quic.StreamID(-1)
+
 type connection struct {
 	quic.Connection
 	ctx context.Context
@@ -55,6 +58,19 @@ type connection struct {
 
 	settings         *Settings
 	receivedSettings chan struct{}
+
+	// maxStreamID is set once a GOAWAY frame is received (client only).
+	// It's protected by streamMx.
+	maxStreamID quic.StreamID
+	// goAwayCtx is cancelled once a GOAWAY frame is received (client only).
+	goAwayCtx    context.Context
+	goAwayCancel context.CancelFunc
+
+	// controlStrHandler is called *after* the SETTINGS frame was parsed.
+	// The client uses it to keep reading the control stream (GOAWAY frames).
+	controlStrHandler func(quic.ReceiveStream, *frameParser)
+	// onStreamsEmpty is called when the last request stream was closed.
+	onStreamsEmpty func()
 
 	idleTimeout time.Duration
 	idleTimer   *time.Timer
@@ -78,7 +94,9 @@ func newConnection(
 		decoder:          qpack.NewDecoder(),
 		receivedSettings: make(chan struct{}),
 		streams:          make(map[protocol.StreamID]*datagrammer),
+		maxStreamID:      invalidStreamID,
 	}
+	c.goAwayCtx, c.goAwayCancel = context.WithCancel(context.Background())
 	if idleTimeout > 0 {
 		c.idleTimer = time.AfterFunc(idleTimeout, c.onIdleTimer)
 	}
@@ -89,13 +107,26 @@ func (c *connection) onIdleTimer() {
 	c.CloseWithError(quic.ApplicationErrorCode(ErrCodeNoError), "idle timeout")
 }
 
-func (c *connection) clearStream(id quic.StreamID) {
+func (c *connection) hasActiveStreams() bool {
 	c.streamMx.Lock()
 	defer c.streamMx.Unlock()
+	return len(c.streams) > 0
+}
 
+func (c *connection) clearStream(id quic.StreamID) {
+	c.streamMx.Lock()
 	delete(c.streams, id)
 	if c.idleTimeout > 0 && len(c.streams) == 0 {
 		c.idleTimer.Reset(c.idleTimeout)
+	}
+	empty := len(c.streams) == 0
+	c.streamMx.Unlock()
+
+	// The client closes the connection once all request streams are done after
+	// it received a GOAWAY frame. This must not run while holding streamMx:
+	// the handler takes the same lock.
+	if empty && c.onStreamsEmpty != nil {
+		c.onStreamsEmpty()
 	}
 }
 
@@ -106,10 +137,33 @@ func (c *connection) openRequestStream(
 	disableCompression bool,
 	maxHeaderBytes uint64,
 ) (*requestStream, error) {
-	str, err := c.OpenStreamSync(ctx)
+	// RFC 9114 Section 5.2 prohibits opening any new request streams after GOAWAY.
+	// The stream ID only identifies requests that were already in flight and might still be processed.
+	// goAwayCtx is only ever cancelled on the client.
+	if c.goAwayCtx.Err() != nil {
+		return nil, errGoAway
+	}
+
+	openCtx, cancel := context.WithCancelCause(ctx)
+	// A request blocked in OpenStreamSync has no request stream yet, so it is not in flight.
+	stop := context.AfterFunc(c.goAwayCtx, func() { cancel(errGoAway) })
+	str, err := c.OpenStreamSync(openCtx)
+	stop()
+	cancel(nil)
 	if err != nil {
+		if context.Cause(openCtx) == errGoAway {
+			return nil, errGoAway
+		}
 		return nil, err
 	}
+
+	// Check again in case GOAWAY raced with OpenStreamSync.
+	if c.goAwayCtx.Err() != nil {
+		str.CancelRead(quic.StreamErrorCode(ErrCodeRequestCanceled))
+		str.CancelWrite(quic.StreamErrorCode(ErrCodeRequestCanceled))
+		return nil, errGoAway
+	}
+
 	datagrams := newDatagrammer(func(b []byte) error { return c.sendDatagram(str.StreamID(), b) })
 	c.streamMx.Lock()
 	c.streams[str.StreamID()] = datagrams
@@ -240,41 +294,53 @@ func (c *connection) handleUnidirectionalStreams(hijack func(StreamType, quic.Co
 				c.Connection.CloseWithError(quic.ApplicationErrorCode(ErrCodeStreamCreationError), "duplicate control stream")
 				return
 			}
-			fp := &frameParser{conn: c.Connection, r: str}
-			f, err := fp.ParseNext()
-			if err != nil {
-				c.Connection.CloseWithError(quic.ApplicationErrorCode(ErrCodeFrameError), "")
-				return
-			}
-			sf, ok := f.(*settingsFrame)
-			if !ok {
-				c.Connection.CloseWithError(quic.ApplicationErrorCode(ErrCodeMissingSettings), "")
-				return
-			}
-			c.settings = &Settings{
-				EnableDatagrams:       sf.Datagram,
-				EnableExtendedConnect: sf.ExtendedConnect,
-				Other:                 sf.Other,
-			}
-			close(c.receivedSettings)
-			if !sf.Datagram {
-				return
-			}
-			// If datagram support was enabled on our side as well as on the server side,
-			// we can expect it to have been negotiated both on the transport and on the HTTP/3 layer.
-			// Note: ConnectionState() will block until the handshake is complete (relevant when using 0-RTT).
-			if c.enableDatagrams && !c.Connection.ConnectionState().SupportsDatagrams {
-				c.Connection.CloseWithError(quic.ApplicationErrorCode(ErrCodeSettingsError), "missing QUIC Datagram support")
-				return
-			}
-			go func() {
-				if err := c.receiveDatagrams(); err != nil {
-					if c.logger != nil {
-						c.logger.Debug("receiving datagrams failed", "error", err)
-					}
-				}
-			}()
+			c.handleControlStream(str)
 		}(str)
+	}
+}
+
+// handleControlStream handles the control stream, after the stream type was read.
+// It parses the SETTINGS frame and sets up HTTP Datagrams, if supported.
+func (c *connection) handleControlStream(str quic.ReceiveStream) {
+	// The control stream is unidirectional: the frame parser needs to know
+	// that it must not treat a PUSH_PROMISE frame as a protocol violation of
+	// type H3_ID_ERROR (that's reserved for request streams).
+	fp := &frameParser{closeConn: c.CloseWithError, r: str, streamID: str.StreamID()}
+	f, err := fp.ParseNext()
+	if err != nil {
+		c.CloseWithError(quic.ApplicationErrorCode(ErrCodeFrameError), "")
+		return
+	}
+	sf, ok := f.(*settingsFrame)
+	if !ok {
+		c.CloseWithError(quic.ApplicationErrorCode(ErrCodeMissingSettings), "")
+		return
+	}
+	c.settings = &Settings{
+		EnableDatagrams:       sf.Datagram,
+		EnableExtendedConnect: sf.ExtendedConnect,
+		Other:                 sf.Other,
+	}
+	close(c.receivedSettings)
+	if sf.Datagram {
+		// If datagram support was enabled on our side as well as on the server side,
+		// we can expect it to have been negotiated both on the transport and on the HTTP/3 layer.
+		// Note: ConnectionState() will block until the handshake is complete (relevant when using 0-RTT).
+		if c.enableDatagrams && !c.Connection.ConnectionState().SupportsDatagrams {
+			c.CloseWithError(quic.ApplicationErrorCode(ErrCodeSettingsError), "missing QUIC Datagram support")
+			return
+		}
+		go func() {
+			if err := c.receiveDatagrams(); err != nil {
+				if c.logger != nil {
+					c.logger.Debug("receiving datagrams failed", "error", err)
+				}
+			}
+		}()
+	}
+
+	if c.controlStrHandler != nil {
+		c.controlStrHandler(str, fp)
 	}
 }
 

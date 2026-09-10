@@ -102,7 +102,7 @@ var _ = Describe("Client", func() {
 			conn.EXPECT().Context().Return(ctx).AnyTimes()
 			cc := tr.NewClientConn(conn)
 			_, err := cc.RoundTrip(request)
-			Expect(err).To(MatchError("done"))
+			Expect(err).To(MatchError("http3: conn unusable: done"))
 			Eventually(frameTypeChan).Should(Receive(BeEquivalentTo(0x41)))
 			time.Sleep(scaleDuration(20 * time.Millisecond)) // don't EXPECT any calls to conn.CloseWithError
 		})
@@ -130,7 +130,7 @@ var _ = Describe("Client", func() {
 			conn.EXPECT().CloseWithError(quic.ApplicationErrorCode(ErrCodeFrameUnexpected), gomock.Any()).Return(nil).AnyTimes()
 			cc := tr.NewClientConn(conn)
 			_, err := cc.RoundTrip(request)
-			Expect(err).To(MatchError("done"))
+			Expect(err).To(MatchError("http3: conn unusable: done"))
 			Eventually(frameTypeChan).Should(Receive(BeEquivalentTo(0x41)))
 		})
 
@@ -157,7 +157,7 @@ var _ = Describe("Client", func() {
 			conn.EXPECT().CloseWithError(quic.ApplicationErrorCode(ErrCodeFrameUnexpected), gomock.Any()).Return(nil).AnyTimes()
 			cc := tr.NewClientConn(conn)
 			_, err := cc.RoundTrip(request)
-			Expect(err).To(MatchError("done"))
+			Expect(err).To(MatchError("http3: conn unusable: done"))
 			Eventually(frameTypeChan).Should(Receive(BeEquivalentTo(0x41)))
 		})
 
@@ -186,7 +186,7 @@ var _ = Describe("Client", func() {
 			conn.EXPECT().CloseWithError(quic.ApplicationErrorCode(ErrCodeFrameUnexpected), gomock.Any()).Return(nil).AnyTimes()
 			cc := tr.NewClientConn(conn)
 			_, err := cc.RoundTrip(request)
-			Expect(err).To(MatchError("done"))
+			Expect(err).To(MatchError("http3: conn unusable: done"))
 			Eventually(done).Should(BeClosed())
 			time.Sleep(scaleDuration(20 * time.Millisecond)) // don't EXPECT any calls to conn.CloseWithError
 		})
@@ -248,7 +248,7 @@ var _ = Describe("Client", func() {
 			conn.EXPECT().Context().Return(ctx).AnyTimes()
 			cc := tr.NewClientConn(conn)
 			_, err := cc.RoundTrip(req)
-			Expect(err).To(MatchError("done"))
+			Expect(err).To(MatchError("http3: conn unusable: done"))
 			Eventually(streamTypeChan).Should(Receive(BeEquivalentTo(0x54)))
 			time.Sleep(scaleDuration(20 * time.Millisecond)) // don't EXPECT any calls to conn.CloseWithError
 		})
@@ -276,7 +276,7 @@ var _ = Describe("Client", func() {
 			conn.EXPECT().Context().Return(ctx).AnyTimes()
 			cc := tr.NewClientConn(conn)
 			_, err := cc.RoundTrip(req)
-			Expect(err).To(MatchError("done"))
+			Expect(err).To(MatchError("http3: conn unusable: done"))
 			Eventually(done).Should(BeClosed())
 			time.Sleep(scaleDuration(20 * time.Millisecond)) // don't EXPECT any calls to conn.CloseWithError
 		})
@@ -305,7 +305,7 @@ var _ = Describe("Client", func() {
 			conn.EXPECT().Context().Return(ctx).AnyTimes()
 			cc := tr.NewClientConn(conn)
 			_, err := cc.RoundTrip(req)
-			Expect(err).To(MatchError("done"))
+			Expect(err).To(MatchError("http3: conn unusable: done"))
 			Eventually(streamTypeChan).Should(Receive(BeEquivalentTo(0x54)))
 			time.Sleep(scaleDuration(20 * time.Millisecond)) // don't EXPECT any calls to conn.CloseWithError
 		})
@@ -341,7 +341,7 @@ var _ = Describe("Client", func() {
 			req, err := http.NewRequest(http.MethodGet, "https://quic-go.net", nil)
 			Expect(err).ToNot(HaveOccurred())
 			_, err = cc.RoundTrip(req)
-			Expect(err).To(MatchError("test done"))
+			Expect(err).To(MatchError("http3: conn unusable: test done"))
 			t, err := quicvarint.Read(&buf)
 			Expect(err).ToNot(HaveOccurred())
 			Expect(t).To(BeEquivalentTo(streamTypeControlStream))
@@ -354,6 +354,8 @@ var _ = Describe("Client", func() {
 			sendSettings()
 			done := make(chan struct{})
 			conn := mockquic.NewMockEarlyConnection(mockCtrl)
+			// the client reads the control stream until it is closed (or the connection is shut down)
+			conn.EXPECT().CloseWithError(gomock.Any(), gomock.Any()).AnyTimes()
 			conn.EXPECT().OpenUniStream().DoAndReturn(func() (quic.SendStream, error) {
 				<-done
 				return nil, errors.New("test done")
@@ -364,6 +366,7 @@ var _ = Describe("Client", func() {
 			r := bytes.NewReader(b)
 			controlStr := mockquic.NewMockStream(mockCtrl)
 			controlStr.EXPECT().Read(gomock.Any()).DoAndReturn(r.Read).AnyTimes()
+			controlStr.EXPECT().StreamID().Return(quic.StreamID(3)).AnyTimes()
 			conn.EXPECT().AcceptUniStream(gomock.Any()).Return(controlStr, nil)
 			conn.EXPECT().AcceptUniStream(gomock.Any()).DoAndReturn(func(context.Context) (quic.ReceiveStream, error) {
 				<-done
@@ -386,6 +389,8 @@ var _ = Describe("Client", func() {
 			var wg sync.WaitGroup
 			wg.Add(2)
 			conn := mockquic.NewMockEarlyConnection(mockCtrl)
+			// the client reads the control stream until it is closed (or the connection is shut down)
+			conn.EXPECT().CloseWithError(gomock.Any(), gomock.Any()).AnyTimes()
 			conn.EXPECT().OpenUniStream().DoAndReturn(func() (quic.SendStream, error) {
 				<-done
 				wg.Done()
@@ -397,6 +402,7 @@ var _ = Describe("Client", func() {
 			r := bytes.NewReader(b)
 			controlStr := mockquic.NewMockStream(mockCtrl)
 			controlStr.EXPECT().Read(gomock.Any()).DoAndReturn(r.Read).AnyTimes()
+			controlStr.EXPECT().StreamID().Return(quic.StreamID(3)).AnyTimes()
 			conn.EXPECT().AcceptUniStream(gomock.Any()).Return(controlStr, nil)
 			conn.EXPECT().AcceptUniStream(gomock.Any()).DoAndReturn(func(context.Context) (quic.ReceiveStream, error) {
 				<-done
@@ -414,7 +420,7 @@ var _ = Describe("Client", func() {
 				Proto:  "connect",
 				Host:   "localhost",
 			})
-			Expect(err).To(MatchError("test error"))
+			Expect(err).To(MatchError("http3: conn unusable: test error"))
 
 			// test shutdown
 			conn.EXPECT().CloseWithError(gomock.Any(), gomock.Any()).MaxTimes(1)
@@ -428,6 +434,8 @@ var _ = Describe("Client", func() {
 			var wg sync.WaitGroup
 			wg.Add(2)
 			conn := mockquic.NewMockEarlyConnection(mockCtrl)
+			// the client reads the control stream until it is closed (or the connection is shut down)
+			conn.EXPECT().CloseWithError(gomock.Any(), gomock.Any()).AnyTimes()
 			conn.EXPECT().Context().Return(context.Background())
 			conn.EXPECT().OpenUniStream().DoAndReturn(func() (quic.SendStream, error) {
 				<-done
@@ -439,6 +447,7 @@ var _ = Describe("Client", func() {
 			r := bytes.NewReader(b)
 			controlStr := mockquic.NewMockStream(mockCtrl)
 			controlStr.EXPECT().Read(gomock.Any()).DoAndReturn(r.Read).AnyTimes()
+			controlStr.EXPECT().StreamID().Return(quic.StreamID(3)).AnyTimes()
 			conn.EXPECT().AcceptUniStream(gomock.Any()).Return(controlStr, nil)
 			conn.EXPECT().AcceptUniStream(gomock.Any()).DoAndReturn(func(context.Context) (quic.ReceiveStream, error) {
 				<-done
@@ -527,7 +536,7 @@ var _ = Describe("Client", func() {
 
 		It("errors if it can't open a request stream", func() {
 			testErr := errors.New("stream open error")
-			conn.EXPECT().OpenStreamSync(context.Background()).Return(nil, testErr)
+			conn.EXPECT().OpenStreamSync(gomock.Any()).Return(nil, testErr)
 			conn.EXPECT().CloseWithError(gomock.Any(), gomock.Any()).MaxTimes(1)
 			conn.EXPECT().HandshakeComplete().Return(handshakeChan)
 			tr := &Transport{}
@@ -542,7 +551,7 @@ var _ = Describe("Client", func() {
 				testErr := errors.New("stream open error")
 				req.Method = method
 				// don't EXPECT any calls to HandshakeComplete()
-				conn.EXPECT().OpenStreamSync(context.Background()).Return(str, nil)
+				conn.EXPECT().OpenStreamSync(gomock.Any()).Return(str, nil)
 				buf := &bytes.Buffer{}
 				str.EXPECT().Write(gomock.Any()).DoAndReturn(buf.Write).AnyTimes()
 				str.EXPECT().Close()
@@ -567,7 +576,7 @@ var _ = Describe("Client", func() {
 			rspBuf := bytes.NewBuffer(encodeResponse(418))
 			gomock.InOrder(
 				conn.EXPECT().HandshakeComplete().Return(handshakeChan),
-				conn.EXPECT().OpenStreamSync(context.Background()).Return(str, nil),
+				conn.EXPECT().OpenStreamSync(gomock.Any()).Return(str, nil),
 				conn.EXPECT().ConnectionState().Return(quic.ConnectionState{}),
 			)
 			str.EXPECT().Write(gomock.Any()).AnyTimes().DoAndReturn(func(p []byte) (int, error) { return len(p), nil })
@@ -596,7 +605,7 @@ var _ = Describe("Client", func() {
 
 			gomock.InOrder(
 				conn.EXPECT().HandshakeComplete().Return(handshakeChan),
-				conn.EXPECT().OpenStreamSync(context.Background()).Return(str, nil),
+				conn.EXPECT().OpenStreamSync(gomock.Any()).Return(str, nil),
 				conn.EXPECT().ConnectionState().Return(quic.ConnectionState{}),
 			)
 			str.EXPECT().Write(gomock.Any()).AnyTimes().DoAndReturn(func(p []byte) (int, error) { return len(p), nil })
@@ -624,7 +633,7 @@ var _ = Describe("Client", func() {
 
 			gomock.InOrder(
 				conn.EXPECT().HandshakeComplete().Return(handshakeChan),
-				conn.EXPECT().OpenStreamSync(context.Background()).Return(str, nil),
+				conn.EXPECT().OpenStreamSync(gomock.Any()).Return(str, nil),
 				conn.EXPECT().ConnectionState().Return(quic.ConnectionState{}),
 			)
 			str.EXPECT().Write(gomock.Any()).AnyTimes().DoAndReturn(func(p []byte) (int, error) { return len(p), nil })
@@ -667,7 +676,7 @@ var _ = Describe("Client", func() {
 
 			gomock.InOrder(
 				conn.EXPECT().HandshakeComplete().Return(handshakeChan),
-				conn.EXPECT().OpenStreamSync(context.Background()).Return(str, nil),
+				conn.EXPECT().OpenStreamSync(gomock.Any()).Return(str, nil),
 				conn.EXPECT().ConnectionState().Return(quic.ConnectionState{}),
 			)
 			str.EXPECT().Write(gomock.Any()).AnyTimes().DoAndReturn(func(p []byte) (int, error) { return len(p), nil })
@@ -709,7 +718,7 @@ var _ = Describe("Client", func() {
 
 			gomock.InOrder(
 				conn.EXPECT().HandshakeComplete().Return(handshakeChan),
-				conn.EXPECT().OpenStreamSync(context.Background()).Return(str, nil),
+				conn.EXPECT().OpenStreamSync(gomock.Any()).Return(str, nil),
 				conn.EXPECT().ConnectionState().Return(quic.ConnectionState{}),
 			)
 			str.EXPECT().Write(gomock.Any()).AnyTimes().DoAndReturn(func(p []byte) (int, error) { return len(p), nil })
@@ -735,7 +744,7 @@ var _ = Describe("Client", func() {
 				strBuf = &bytes.Buffer{}
 				gomock.InOrder(
 					conn.EXPECT().HandshakeComplete().Return(handshakeChan),
-					conn.EXPECT().OpenStreamSync(context.Background()).Return(str, nil),
+					conn.EXPECT().OpenStreamSync(gomock.Any()).Return(str, nil),
 				)
 				body := &mockBody{}
 				body.SetData([]byte("request body"))
@@ -908,7 +917,7 @@ var _ = Describe("Client", func() {
 				ctx, cancel := context.WithCancel(context.Background())
 				req := req.WithContext(ctx)
 				conn.EXPECT().HandshakeComplete().Return(handshakeChan)
-				conn.EXPECT().OpenStreamSync(ctx).Return(str, nil)
+				conn.EXPECT().OpenStreamSync(gomock.Any()).Return(str, nil)
 				buf := &bytes.Buffer{}
 				str.EXPECT().Close().MaxTimes(1)
 				str.EXPECT().Write(gomock.Any()).DoAndReturn(buf.Write)
@@ -939,7 +948,7 @@ var _ = Describe("Client", func() {
 				ctx, cancel := context.WithCancel(context.Background())
 				req := req.WithContext(ctx)
 				conn.EXPECT().HandshakeComplete().Return(handshakeChan)
-				conn.EXPECT().OpenStreamSync(ctx).Return(str, nil)
+				conn.EXPECT().OpenStreamSync(gomock.Any()).Return(str, nil)
 				conn.EXPECT().ConnectionState().Return(quic.ConnectionState{})
 				buf := &bytes.Buffer{}
 				str.EXPECT().Close().MaxTimes(1)
@@ -964,7 +973,7 @@ var _ = Describe("Client", func() {
 			})
 
 			It("adds the gzip header to requests", func() {
-				conn.EXPECT().OpenStreamSync(context.Background()).Return(str, nil)
+				conn.EXPECT().OpenStreamSync(gomock.Any()).Return(str, nil)
 				buf := &bytes.Buffer{}
 				str.EXPECT().Write(gomock.Any()).DoAndReturn(buf.Write)
 				gomock.InOrder(
@@ -986,7 +995,7 @@ var _ = Describe("Client", func() {
 			It("doesn't add gzip if the header disable it", func() {
 				tr := &Transport{DisableCompression: true}
 				client := tr.NewClientConn(conn)
-				conn.EXPECT().OpenStreamSync(context.Background()).Return(str, nil)
+				conn.EXPECT().OpenStreamSync(gomock.Any()).Return(str, nil)
 				buf := &bytes.Buffer{}
 				str.EXPECT().Write(gomock.Any()).DoAndReturn(buf.Write)
 				gomock.InOrder(
@@ -1004,7 +1013,7 @@ var _ = Describe("Client", func() {
 			})
 
 			It("decompresses the response", func() {
-				conn.EXPECT().OpenStreamSync(context.Background()).Return(str, nil)
+				conn.EXPECT().OpenStreamSync(gomock.Any()).Return(str, nil)
 				conn.EXPECT().ConnectionState().Return(quic.ConnectionState{})
 				buf := &bytes.Buffer{}
 				rstr := mockquic.NewMockStream(mockCtrl)
@@ -1033,7 +1042,7 @@ var _ = Describe("Client", func() {
 			})
 
 			It("only decompresses the response if the response contains the right content-encoding header", func() {
-				conn.EXPECT().OpenStreamSync(context.Background()).Return(str, nil)
+				conn.EXPECT().OpenStreamSync(gomock.Any()).Return(str, nil)
 				conn.EXPECT().ConnectionState().Return(quic.ConnectionState{})
 				buf := &bytes.Buffer{}
 				rstr := mockquic.NewMockStream(mockCtrl)
@@ -1078,7 +1087,7 @@ var _ = Describe("Client", func() {
 				rspBuf := bytes.NewBuffer(encodeResponse(103))
 				gomock.InOrder(
 					conn.EXPECT().HandshakeComplete().Return(handshakeChan),
-					conn.EXPECT().OpenStreamSync(ctx).Return(str, nil),
+					conn.EXPECT().OpenStreamSync(gomock.Any()).Return(str, nil),
 					conn.EXPECT().ConnectionState().Return(quic.ConnectionState{}),
 				)
 				str.EXPECT().Write(gomock.Any()).AnyTimes().DoAndReturn(func(p []byte) (int, error) { return len(p), nil })
@@ -1112,7 +1121,7 @@ var _ = Describe("Client", func() {
 				rspBuf := bytes.NewBuffer(encodeResponse(101))
 				gomock.InOrder(
 					conn.EXPECT().HandshakeComplete().Return(handshakeChan),
-					conn.EXPECT().OpenStreamSync(ctx).Return(str, nil),
+					conn.EXPECT().OpenStreamSync(gomock.Any()).Return(str, nil),
 					conn.EXPECT().ConnectionState().Return(quic.ConnectionState{}),
 				)
 				str.EXPECT().Write(gomock.Any()).AnyTimes().DoAndReturn(func(p []byte) (int, error) { return len(p), nil })

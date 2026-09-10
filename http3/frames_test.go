@@ -41,8 +41,8 @@ var _ = Describe("Frames", func() {
 
 			conn.EXPECT().CloseWithError(quic.ApplicationErrorCode(ErrCodeFrameUnexpected), gomock.Any())
 			fp := frameParser{
-				r:    bytes.NewReader(data),
-				conn: conn,
+				r:         bytes.NewReader(data),
+				closeConn: conn.CloseWithError,
 			}
 			_, err := fp.ParseNext()
 			Expect(err).To(HaveOccurred())

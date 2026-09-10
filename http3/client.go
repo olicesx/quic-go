@@ -32,6 +32,13 @@ const (
 	defaultMaxResponseHeaderBytes = 10 * 1 << 20 // 10 MB
 )
 
+var errGoAway = errors.New("connection in graceful shutdown")
+
+type errConnUnusable struct{ e error }
+
+func (e *errConnUnusable) Unwrap() error { return e.e }
+func (e *errConnUnusable) Error() string { return fmt.Sprintf("http3: conn unusable: %s", e.e.Error()) }
+
 var defaultQuicConfig = &quic.Config{
 	MaxIncomingStreams: -1, // don't allow the server to create bidirectional streams
 	KeepAlivePeriod:    10 * time.Second,
@@ -103,6 +110,11 @@ func newClientConn(
 		c.logger,
 		0,
 	)
+	// controlStrHandler is a promoted field; the explicit connection selector
+	// is needed for onStreamsEmpty below, where the field and the method share
+	// a name.
+	c.controlStrHandler = c.handleControlStream
+	c.connection.onStreamsEmpty = c.onStreamsEmpty
 	// send the SETTINGs frame, using 0-RTT data, if possible
 	go func() {
 		if err := c.setupConn(); err != nil {
@@ -122,6 +134,61 @@ func newClientConn(
 // OpenRequestStream opens a new request stream on the HTTP/3 connection.
 func (c *ClientConn) OpenRequestStream(ctx context.Context) (RequestStream, error) {
 	return c.openRequestStream(ctx, c.requestWriter, nil, c.disableCompression, c.maxResponseHeaderBytes)
+}
+
+// handleControlStream keeps reading the control stream after the SETTINGS frame
+// was parsed. GOAWAY is the only frame allowed at this point:
+//   - unexpected frames are rejected by the frame parser or here,
+//   - we don't support any extension that might add support for more frames.
+func (c *ClientConn) handleControlStream(str quic.ReceiveStream, fp *frameParser) {
+	for {
+		f, err := fp.ParseNext()
+		if err != nil {
+			var serr *quic.StreamError
+			if err == io.EOF || errors.As(err, &serr) {
+				c.CloseWithError(quic.ApplicationErrorCode(ErrCodeClosedCriticalStream), "")
+				return
+			}
+			c.CloseWithError(quic.ApplicationErrorCode(ErrCodeFrameError), "")
+			return
+		}
+		goaway, ok := f.(*goAwayFrame)
+		if !ok {
+			c.CloseWithError(quic.ApplicationErrorCode(ErrCodeFrameUnexpected), "")
+			return
+		}
+		if goaway.StreamID%4 != 0 { // client-initiated, bidirectional streams
+			c.CloseWithError(quic.ApplicationErrorCode(ErrCodeIDError), "")
+			return
+		}
+		c.streamMx.Lock()
+		// the server is not allowed to increase the Stream ID in subsequent GOAWAY frames
+		if c.maxStreamID != invalidStreamID && goaway.StreamID > c.maxStreamID {
+			c.streamMx.Unlock()
+			c.CloseWithError(quic.ApplicationErrorCode(ErrCodeIDError), "")
+			return
+		}
+		c.maxStreamID = goaway.StreamID
+		c.goAwayCancel()
+		c.streamMx.Unlock()
+
+		// immediately close the connection if there are currently no active requests
+		if !c.hasActiveStreams() {
+			c.CloseWithError(quic.ApplicationErrorCode(ErrCodeNoError), "")
+			return
+		}
+	}
+}
+
+// onStreamsEmpty is called when the last request stream was closed.
+func (c *ClientConn) onStreamsEmpty() {
+	c.streamMx.Lock()
+	defer c.streamMx.Unlock()
+
+	// The server is performing a graceful shutdown.
+	if c.maxStreamID != invalidStreamID {
+		c.CloseWithError(quic.ApplicationErrorCode(ErrCodeNoError), "")
+	}
 }
 
 func (c *ClientConn) setupConn() error {
@@ -148,8 +215,8 @@ func (c *ClientConn) handleBidirectionalStreams(streamHijacker func(FrameType, q
 			return
 		}
 		fp := &frameParser{
-			r:    str,
-			conn: &c.connection,
+			r:         str,
+			closeConn: c.CloseWithError,
 			unknownFrameHandler: func(ft FrameType, e error) (processed bool, err error) {
 				id := c.connection.Context().Value(quic.ConnectionTracingKey).(quic.ConnectionTracingID)
 				return streamHijacker(ft, id, str, e)
@@ -228,7 +295,7 @@ func (c *ClientConn) roundTrip(req *http.Request) (*http.Response, error) {
 		c.maxResponseHeaderBytes,
 	)
 	if err != nil {
-		return nil, err
+		return nil, &errConnUnusable{e: err}
 	}
 
 	// Request Cancellation:

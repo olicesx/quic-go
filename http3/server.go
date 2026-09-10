@@ -601,7 +601,7 @@ func (s *Server) handleRequest(conn *connection, str quic.Stream, datagrams *dat
 			)
 		}
 	}
-	fp := &frameParser{conn: conn, r: str, unknownFrameHandler: ufh}
+	fp := &frameParser{closeConn: conn.CloseWithError, r: str, unknownFrameHandler: ufh}
 	frame, err := fp.ParseNext()
 	if err != nil {
 		if !errors.Is(err, errHijacked) {

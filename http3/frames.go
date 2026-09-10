@@ -7,6 +7,7 @@ import (
 	"io"
 
 	"github.com/olicesx/quic-go"
+	"github.com/olicesx/quic-go/internal/protocol"
 	"github.com/olicesx/quic-go/quicvarint"
 )
 
@@ -21,8 +22,16 @@ var errHijacked = errors.New("hijacked")
 
 type frameParser struct {
 	r                   io.Reader
-	conn                quic.Connection
 	unknownFrameHandler unknownFrameHandlerFunc
+
+	// streamID is the ID of the stream this parser reads from.
+	// It is only used to distinguish request streams from the control stream
+	// (see the PUSH_PROMISE handling). A zero value is treated as a request
+	// stream, which is the safe default: if it was set, it is only ever set to
+	// the ID of a control stream.
+	streamID quic.StreamID
+	// closeConn closes the connection with an application error.
+	closeConn func(quic.ApplicationErrorCode, string) error
 }
 
 func (p *frameParser) ParseNext() (frame, error) {
@@ -66,11 +75,26 @@ func (p *frameParser) ParseNext() (frame, error) {
 			return parseSettingsFrame(p.r, l)
 		case 0x3: // CANCEL_PUSH
 		case 0x5: // PUSH_PROMISE
+			// This endpoint never sends a MAX_PUSH_ID frame, so the peer is not
+			// allowed to push.
+			// On a request stream, RFC 9114, Section 7.2.5 requires treating
+			// the receipt of a PUSH_PROMISE frame as a connection error of
+			// type H3_ID_ERROR.
+			if p.streamID.Type() == protocol.StreamTypeBidi {
+				p.closeConn(quic.ApplicationErrorCode(ErrCodeIDError), "")
+				return nil, fmt.Errorf("http3: received PUSH_PROMISE frame on stream %d", p.streamID)
+			}
+			// On the control stream, the frame is rejected with
+			// H3_FRAME_UNEXPECTED (RFC 9114, Section 7.2.5), so hand it out.
+			if _, err := io.CopyN(io.Discard, qr, int64(l)); err != nil {
+				return nil, err
+			}
+			return &pushPromiseFrame{Length: l}, nil
 		case 0x7:
 			return parseGoAwayFrame(qr, l)
 		case 0xd: // MAX_PUSH_ID
 		case 0x2, 0x6, 0x8, 0x9:
-			p.conn.CloseWithError(quic.ApplicationErrorCode(ErrCodeFrameUnexpected), "")
+			p.closeConn(quic.ApplicationErrorCode(ErrCodeFrameUnexpected), "")
 			return nil, fmt.Errorf("http3: reserved frame type: %d", t)
 		}
 		// skip over unknown frames
@@ -95,6 +119,18 @@ type headersFrame struct {
 
 func (f *headersFrame) Append(b []byte) []byte {
 	b = quicvarint.Append(b, 0x1)
+	return quicvarint.Append(b, f.Length)
+}
+
+// pushPromiseFrame is a PUSH_PROMISE frame (RFC 9114, Section 7.2.5).
+// This endpoint never pushes and never accepts pushes, so the frame is only
+// used to reject it.
+type pushPromiseFrame struct {
+	Length uint64
+}
+
+func (f *pushPromiseFrame) Append(b []byte) []byte {
+	b = quicvarint.Append(b, 0x5)
 	return quicvarint.Append(b, f.Length)
 }
 

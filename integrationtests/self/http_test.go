@@ -373,19 +373,50 @@ func TestHTTPServerIdleTimeout(t *testing.T) {
 	mux.HandleFunc("/hello", func(w http.ResponseWriter, r *http.Request) {
 		io.WriteString(w, "Hello, World!\n")
 	})
-	port := startHTTPServer(t, mux, func(s *http3.Server) { s.IdleTimeout = 100 * time.Millisecond })
+	idleTimeout := scaleDuration(100 * time.Millisecond)
+	port := startHTTPServer(t, mux, func(s *http3.Server) { s.IdleTimeout = idleTimeout })
 
-	cl := newHTTP3Client(t)
-	_, err := cl.Get(fmt.Sprintf("https://localhost:%d/hello", port))
+	// The Transport re-dials when it is handed a connection that the server
+	// closed idle (see docs/audit-corrections.md, P2-14/P2-15), so the idle
+	// close is observed on the connection, not on the next request.
+	connChan := make(chan quic.EarlyConnection, 1)
+	tr := &http3.Transport{
+		TLSClientConfig:    getTLSClientConfigWithoutServerName(),
+		QUICConfig:         getQuicConfig(&quic.Config{MaxIdleTimeout: 10 * time.Second}),
+		DisableCompression: true,
+		Dial: func(ctx context.Context, addr string, tlsConf *tls.Config, conf *quic.Config) (quic.EarlyConnection, error) {
+			conn, err := quic.DialAddrEarly(ctx, addr, tlsConf, conf)
+			if conn != nil {
+				connChan <- conn
+			}
+			return conn, err
+		},
+	}
+	t.Cleanup(func() { tr.Close() })
+	cl := &http.Client{Transport: tr}
+
+	resp, err := cl.Get(fmt.Sprintf("https://localhost:%d/hello", port))
 	require.NoError(t, err)
+	_, err = io.Copy(io.Discard, resp.Body)
+	require.NoError(t, err)
+	require.NoError(t, resp.Body.Close())
 
-	time.Sleep(150 * time.Millisecond)
+	var conn quic.EarlyConnection
+	select {
+	case conn = <-connChan:
+	case <-time.After(time.Second):
+		t.Fatal("connection was not opened")
+	}
 
-	_, err = cl.Get(fmt.Sprintf("https://localhost:%d/hello", port))
-	require.Error(t, err)
-	var appErr *quic.ApplicationError
-	require.ErrorAs(t, err, &appErr)
-	require.Equal(t, quic.ApplicationErrorCode(http3.ErrCodeNoError), appErr.ErrorCode)
+	select {
+	case <-time.After(5 * idleTimeout):
+		t.Fatal("connection was not closed")
+	case <-conn.Context().Done():
+	}
+	require.ErrorIs(t,
+		context.Cause(conn.Context()),
+		&quic.ApplicationError{Remote: true, ErrorCode: quic.ApplicationErrorCode(http3.ErrCodeNoError)},
+	)
 }
 
 func TestHTTPReestablishConnectionAfterDialError(t *testing.T) {
