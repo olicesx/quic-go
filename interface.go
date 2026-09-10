@@ -348,8 +348,21 @@ type Config struct {
 	// Only valid for the server.
 	Allow0RTT bool
 	// Enable QUIC datagram support (RFC 9221).
-	EnableDatagrams    bool
-	Tracer             func(context.Context, logging.Perspective, ConnectionID) *logging.ConnectionTracer
+	EnableDatagrams bool
+	Tracer          func(context.Context, logging.Perspective, ConnectionID) *logging.ConnectionTracer
+	// CapabilityCallback is called when the number of streams this endpoint is
+	// allowed to open changes. n is the number of streams that can be opened
+	// right now, without waiting for a MAX_STREAMS frame.
+	//
+	// The callback is called synchronously, while the connection's streams-map
+	// lock is held. Depending on what triggered it, it runs either on the
+	// application goroutine (a stream was opened) or on the connection's run
+	// loop (a MAX_STREAMS frame was processed).
+	//
+	// It must not block, and it must not call back into the connection (or into
+	// anything that does, e.g. OpenStream, CloseWithError or SendDatagram):
+	// Go mutexes are not reentrant, so such a call deadlocks. Updating a counter
+	// or waking another goroutine with a non-blocking channel send is fine.
 	CapabilityCallback func(n int64)
 }
 
