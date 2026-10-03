@@ -410,6 +410,23 @@ func (s *receiveStream) SetReadDeadline(t time.Time) error {
 	return nil
 }
 
+// BufferedRead reports how many stream bytes are already buffered and
+// readable without waiting for the network: the unconsumed remainder of the
+// current frame plus the next contiguous queued frame. Relay copy loops use
+// it to decide whether another Read completes immediately (write batching)
+// without arming deadlines or issuing speculative reads, both of which can
+// disrupt stream state. It is observational only and never blocks.
+func (s *receiveStream) ReadBuffered() int {
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
+	n := 0
+	if len(s.currentFrame) > s.readPosInFrame {
+		n += len(s.currentFrame) - s.readPosInFrame
+	}
+	n += s.frameQueue.PeekContiguous()
+	return n
+}
+
 // CloseForShutdown closes a stream abruptly.
 // It makes Read unblock (and return the error) immediately.
 // The peer will NOT be informed about this: the stream is closed without sending a FIN or RESET.

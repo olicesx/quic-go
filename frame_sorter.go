@@ -228,6 +228,17 @@ func (s *frameSorter) HasMoreData() bool {
 	return len(s.queue) > 0
 }
 
+// PeekContiguous returns the number of bytes of the frame queued exactly at
+// the current read position, i.e. the bytes the next Pop would hand out
+// without waiting for a gap to be filled. It is an observational query for
+// copy loops that batch reads: it never mutates the sorter.
+func (s *frameSorter) PeekContiguous() int {
+	if entry, ok := s.queue[s.readPos]; ok {
+		return len(entry.Data)
+	}
+	return 0
+}
+
 // releaseAll returns every queued frame to its pool, including frames sitting
 // at unread gaps that Pop (which only yields the contiguous next frame) would
 // not reach. Used on abrupt stream close so out-of-order frames are not
