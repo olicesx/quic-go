@@ -921,8 +921,14 @@ func (s *connection) handlePacketImpl(rp receivedPacket) bool {
 		}
 	}
 
-	// Hysteria connection migration
-	// Set remote address to the address of the last received valid packet
+	// Hysteria connection migration: trust the source address of the packet that
+	// was just processed and skip the RFC 9000 Section 9 PATH_CHALLENGE /
+	// PATH_RESPONSE path validation. This is a deliberate fork deviation, not an
+	// oversight: Hysteria relies on address roaming to survive NAT rebinding.
+	// processed is only true for packets this endpoint authenticated, and the
+	// long-header (Initial) keys are discarded once the handshake completes, so
+	// an off-path attacker cannot move the peer address; an on-path attacker can
+	// redirect the flow either way.
 	if s.perspective == protocol.PerspectiveServer && processed {
 		// Connection migration
 		s.conn.SetRemoteAddr(rp.remoteAddr)
