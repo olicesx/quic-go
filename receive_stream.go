@@ -325,7 +325,13 @@ func (s *receiveStream) handleStreamFrameImpl(frame *wire.StreamFrame, now time.
 	if frame.Fin {
 		s.finalOffset = maxOffset
 	}
-	if s.cancelledLocally {
+	if s.cancelledLocally || s.cancelledRemotely {
+		// After either cancel, readImpl reports cancelErr before it ever
+		// dequeues, so a frame queued now would sit in the sorter until the
+		// stream is torn down: memory pinned up to the receive window and a
+		// pooled frame lost from circulation. The flow-control accounting
+		// above has already run, so returning the frame is the only
+		// remaining obligation.
 		frame.PutBack()
 		return nil
 	}
@@ -410,12 +416,17 @@ func (s *receiveStream) SetReadDeadline(t time.Time) error {
 	return nil
 }
 
-// BufferedRead reports how many stream bytes are already buffered and
+// ReadBuffered reports how many stream bytes are already buffered and
 // readable without waiting for the network: the unconsumed remainder of the
 // current frame plus the next contiguous queued frame. Relay copy loops use
 // it to decide whether another Read completes immediately (write batching)
 // without arming deadlines or issuing speculative reads, both of which can
 // disrupt stream state. It is observational only and never blocks.
+//
+// A non-zero result does not guarantee the next Read returns bytes: a read
+// deadline that has already expired, a cancellation, or a shutdown error is
+// reported by Read before any buffered data is consumed. Callers must treat
+// the value as a batching hint only, never as a delivery promise.
 func (s *receiveStream) ReadBuffered() int {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
