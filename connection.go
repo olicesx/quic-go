@@ -851,7 +851,7 @@ func (s *connection) handlePacketImpl(rp receivedPacket) bool {
 	p := rp
 	for len(data) > 0 {
 		if counter > 0 {
-			p = *(p.Clone())
+			p = *p.Clone()
 			p.data = data
 
 			destConnID, err := wire.ParseConnectionID(p.data, s.srcConnIDLen)

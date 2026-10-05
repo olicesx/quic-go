@@ -63,8 +63,8 @@ type streamI interface {
 }
 
 var (
-	_ receiveStreamI = (streamI)(nil)
-	_ sendStreamI    = (streamI)(nil)
+	_ receiveStreamI = streamI(nil)
+	_ sendStreamI    = streamI(nil)
 )
 
 // A Stream assembles the data from StreamFrames and provides a super-convenient Read-Interface
