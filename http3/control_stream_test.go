@@ -192,6 +192,66 @@ func TestClientConnGoAwayWithActiveStream(t *testing.T) {
 	}
 }
 
+// A GOAWAY frame that arrives while a request stream open is still in flight
+// must not close the connection out from under that request: no stream is
+// registered yet, but the request is already on its way. Once the open resolves
+// and nothing is active anymore, the connection is closed with H3_NO_ERROR
+// (RFC 9114, Section 5.2).
+func TestClientConnGoAwayWhileOpenInFlight(t *testing.T) {
+	tc := newGoAwayTestConn(t)
+	closed := tc.expectClose()
+
+	openStarted := make(chan struct{})
+	releaseOpen := make(chan struct{})
+	str := mockquic.NewMockStream(tc.mockCtrl)
+	str.EXPECT().StreamID().Return(quic.StreamID(0)).AnyTimes()
+	str.EXPECT().CancelRead(gomock.Any()).AnyTimes()
+	str.EXPECT().CancelWrite(gomock.Any()).AnyTimes()
+	tc.conn.EXPECT().OpenStreamSync(gomock.Any()).DoAndReturn(func(context.Context) (quic.Stream, error) {
+		close(openStarted)
+		<-releaseOpen
+		return str, nil
+	})
+
+	errCh := make(chan error, 1)
+	go func() {
+		_, err := tc.cc.OpenRequestStream(context.Background())
+		errCh <- err
+	}()
+	select {
+	case <-openStarted:
+	case <-time.After(time.Second):
+		t.Fatal("timeout waiting for the request stream open to start")
+	}
+
+	tc.sendFrame(t, (&goAwayFrame{StreamID: 8}).Append(nil))
+
+	// The open counts as activity, so the connection stays up.
+	select {
+	case code := <-closed:
+		t.Fatalf("connection closed while a request stream open was in flight: %d", code)
+	case <-time.After(scaleDuration(10 * time.Millisecond)):
+	}
+
+	// The open still observes the GOAWAY: the request is refused with the
+	// retryable error instead of being served on a stream RFC 9114 forbids.
+	close(releaseOpen)
+	select {
+	case err := <-errCh:
+		require.ErrorIs(t, err, errGoAway)
+	case <-time.After(time.Second):
+		t.Fatal("timeout waiting for the open to return")
+	}
+
+	// With nothing active anymore, the deferred close happens with H3_NO_ERROR.
+	select {
+	case code := <-closed:
+		require.Equal(t, quic.ApplicationErrorCode(ErrCodeNoError), code)
+	case <-time.After(time.Second):
+		t.Fatal("timeout waiting for the connection to be closed")
+	}
+}
+
 func TestClientConnGoAwayFailures(t *testing.T) {
 	tests := []struct {
 		name string
