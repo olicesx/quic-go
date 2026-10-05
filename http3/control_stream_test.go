@@ -106,6 +106,19 @@ func (c *goAwayTestConn) sendFrame(t *testing.T, b []byte) {
 	require.NoError(t, err)
 }
 
+// waitForGoAway blocks until the control-stream handler has processed a GOAWAY
+// frame. The handler runs on its own goroutine, so a test that asserts on the
+// connection state after sendFrame must not rely on it having made progress
+// within some fixed delay.
+func (c *goAwayTestConn) waitForGoAway(t *testing.T) {
+	t.Helper()
+	require.Eventually(t, func() bool {
+		c.cc.streamMx.Lock()
+		defer c.cc.streamMx.Unlock()
+		return c.cc.maxStreamID != invalidStreamID
+	}, time.Second, scaleDuration(time.Millisecond), "timeout waiting for the GOAWAY frame to be processed")
+}
+
 // expectClose asserts that the connection is closed with the given error code.
 func (c *goAwayTestConn) expectClose() <-chan quic.ApplicationErrorCode {
 	closed := make(chan quic.ApplicationErrorCode, 1)
@@ -205,6 +218,9 @@ func TestClientConnGoAwayWhileOpenInFlight(t *testing.T) {
 	releaseOpen := make(chan struct{})
 	str := mockquic.NewMockStream(tc.mockCtrl)
 	str.EXPECT().StreamID().Return(quic.StreamID(0)).AnyTimes()
+	// Guards for the path where the open does register: a slower control
+	// goroutine must produce a plain assertion failure, not a mock abort.
+	str.EXPECT().Context().Return(context.Background()).AnyTimes()
 	str.EXPECT().CancelRead(gomock.Any()).AnyTimes()
 	str.EXPECT().CancelWrite(gomock.Any()).AnyTimes()
 	tc.conn.EXPECT().OpenStreamSync(gomock.Any()).DoAndReturn(func(context.Context) (quic.Stream, error) {
@@ -225,6 +241,7 @@ func TestClientConnGoAwayWhileOpenInFlight(t *testing.T) {
 	}
 
 	tc.sendFrame(t, (&goAwayFrame{StreamID: 8}).Append(nil))
+	tc.waitForGoAway(t)
 
 	// The open counts as activity, so the connection stays up.
 	select {
@@ -244,6 +261,72 @@ func TestClientConnGoAwayWhileOpenInFlight(t *testing.T) {
 	}
 
 	// With nothing active anymore, the deferred close happens with H3_NO_ERROR.
+	select {
+	case code := <-closed:
+		require.Equal(t, quic.ApplicationErrorCode(ErrCodeNoError), code)
+	case <-time.After(time.Second):
+		t.Fatal("timeout waiting for the connection to be closed")
+	}
+}
+
+// The deferred close must survive the last *registered* stream finishing while
+// an open is in flight. clearStream removes the stream and can observe an empty
+// stream map, but the in-flight open is still activity. Regression: the
+// connection was closed with H3_NO_ERROR at that point, under a request that
+// was between "stream obtained" and "stream registered", and the request died
+// with a non-retryable error instead of a graceful-shutdown retry.
+func TestClientConnGoAwayClearStreamWhileOpenInFlight(t *testing.T) {
+	tc := newGoAwayTestConn(t)
+	closed := tc.expectClose()
+
+	// A request stream that is registered and in flight.
+	tc.cc.streamMx.Lock()
+	tc.cc.streams[quic.StreamID(0)] = nil
+	tc.cc.streamMx.Unlock()
+
+	openStarted := make(chan struct{})
+	releaseOpen := make(chan struct{})
+	str := mockquic.NewMockStream(tc.mockCtrl)
+	str.EXPECT().StreamID().Return(quic.StreamID(4)).AnyTimes()
+	str.EXPECT().Context().Return(context.Background()).AnyTimes()
+	str.EXPECT().CancelRead(gomock.Any()).AnyTimes()
+	str.EXPECT().CancelWrite(gomock.Any()).AnyTimes()
+	tc.conn.EXPECT().OpenStreamSync(gomock.Any()).DoAndReturn(func(context.Context) (quic.Stream, error) {
+		close(openStarted)
+		<-releaseOpen
+		return str, nil
+	})
+
+	errCh := make(chan error, 1)
+	go func() {
+		_, err := tc.cc.OpenRequestStream(context.Background())
+		errCh <- err
+	}()
+	select {
+	case <-openStarted:
+	case <-time.After(time.Second):
+		t.Fatal("timeout waiting for the request stream open to start")
+	}
+
+	tc.sendFrame(t, (&goAwayFrame{StreamID: 8}).Append(nil))
+	tc.waitForGoAway(t)
+
+	// The registered stream finishes while the open is still in flight.
+	tc.cc.clearStream(quic.StreamID(0))
+	select {
+	case code := <-closed:
+		t.Fatalf("connection closed while a request stream open was in flight: %d", code)
+	case <-time.After(scaleDuration(10 * time.Millisecond)):
+	}
+
+	close(releaseOpen)
+	select {
+	case err := <-errCh:
+		require.ErrorIs(t, err, errGoAway)
+	case <-time.After(time.Second):
+		t.Fatal("timeout waiting for the open to return")
+	}
+
 	select {
 	case code := <-closed:
 		require.Equal(t, quic.ApplicationErrorCode(ErrCodeNoError), code)

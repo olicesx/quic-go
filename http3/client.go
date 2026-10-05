@@ -180,13 +180,20 @@ func (c *ClientConn) handleControlStream(str quic.ReceiveStream, fp *frameParser
 	}
 }
 
-// onStreamsEmpty is called when the last request stream was closed.
+// onStreamsEmpty is called when the last request stream was closed, or when an
+// open that never registered a stream was released.
 func (c *ClientConn) onStreamsEmpty() {
 	c.streamMx.Lock()
 	defer c.streamMx.Unlock()
 
-	// The server is performing a graceful shutdown.
-	if c.maxStreamID != invalidStreamID {
+	// The server is performing a graceful shutdown, and no request can still be
+	// in flight: every registered stream is gone and no open sits between
+	// "started" and "registered". The condition is re-checked here, under
+	// streamMx, because a caller's snapshot can already be stale (a stream may
+	// have registered, or an open may have started, after the caller decided to
+	// call). Closing on a stale snapshot cuts off a request the server is still
+	// allowed to serve.
+	if c.maxStreamID != invalidStreamID && len(c.streams) == 0 && c.openingRequests == 0 {
 		c.CloseWithError(quic.ApplicationErrorCode(ErrCodeNoError), "")
 	}
 }

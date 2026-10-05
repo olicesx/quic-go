@@ -118,28 +118,36 @@ func (c *connection) hasActiveStreams() bool {
 	return len(c.streams) > 0 || c.openingRequests > 0
 }
 
-// beginOpen marks one request stream open as in flight. A GOAWAY that arrives
-// before the stream is registered must not close the connection out from under
-// the request, so the open counts as activity until it resolves. beginOpen must
-// be paired with either a registration (which transfers the activity to the
-// stream) or endOpen.
-func (c *connection) beginOpen() {
+// beginOpen marks one request stream open as in flight and reports whether the
+// open may proceed. A GOAWAY that arrives before the stream is registered must
+// not close the connection out from under the request, so an in-flight open
+// counts as activity until it resolves; a GOAWAY that arrived first refuses the
+// open. The GOAWAY handler stores maxStreamID under streamMx, so checking it in
+// the same critical section as the increment means a GOAWAY can neither be
+// missed nor slip between the check and the count. beginOpen must be paired
+// with either a registration (which transfers the activity to the stream) or
+// endOpen.
+func (c *connection) beginOpen() bool {
 	c.streamMx.Lock()
+	defer c.streamMx.Unlock()
+	if c.maxStreamID != invalidStreamID {
+		return false
+	}
 	c.openingRequests++
-	c.streamMx.Unlock()
+	return true
 }
 
-// endOpen releases an in-flight open that did not register a stream. When a
-// GOAWAY arrived while it was in flight, handleGoAway could not decide to close
-// the connection yet, so that decision is made here once nothing is active.
-// This must not run while holding streamMx: onStreamsEmpty takes the same lock.
+// endOpen releases an in-flight open that did not register a stream. A GOAWAY
+// that arrived while it was in flight could not decide to close the connection
+// yet, so onStreamsEmpty is asked to look again; that callback owns the
+// decision and validates the state itself. This must not run while holding
+// streamMx: onStreamsEmpty takes the same lock.
 func (c *connection) endOpen() {
 	c.streamMx.Lock()
 	c.openingRequests--
-	empty := len(c.streams) == 0 && c.openingRequests == 0
 	c.streamMx.Unlock()
 
-	if empty && c.onStreamsEmpty != nil {
+	if c.onStreamsEmpty != nil {
 		c.onStreamsEmpty()
 	}
 }
@@ -150,13 +158,14 @@ func (c *connection) clearStream(id quic.StreamID) {
 	if c.idleTimeout > 0 && len(c.streams) == 0 {
 		c.idleTimer.Reset(c.idleTimeout)
 	}
-	empty := len(c.streams) == 0
 	c.streamMx.Unlock()
 
 	// The client closes the connection once all request streams are done after
-	// it received a GOAWAY frame. This must not run while holding streamMx:
-	// the handler takes the same lock.
-	if empty && c.onStreamsEmpty != nil {
+	// it received a GOAWAY frame. onStreamsEmpty owns that decision and
+	// re-checks it under streamMx: a snapshot taken here can already be stale
+	// (a new stream may have registered, or an open may still be in flight).
+	// This must not run while holding streamMx: the handler takes the same lock.
+	if c.onStreamsEmpty != nil {
 		c.onStreamsEmpty()
 	}
 }
@@ -170,24 +179,27 @@ func (c *connection) openRequestStream(
 ) (*requestStream, error) {
 	// RFC 9114 Section 5.2 prohibits opening any new request streams after GOAWAY.
 	// The stream ID only identifies requests that were already in flight and might still be processed.
-	// goAwayCtx is only ever cancelled on the client.
-	if c.goAwayCtx.Err() != nil {
+	// beginOpen checks the GOAWAY state and counts the open in one step.
+	if !c.beginOpen() {
 		return nil, errGoAway
 	}
-
-	// Count the open as activity before blocking: a GOAWAY arriving now must not
-	// close the connection while this request is between "open started" and
-	// "stream registered" (see beginOpen).
-	c.beginOpen()
+	// Release the open on every path, including a panic, so the count can never
+	// leak and keep deferring the GOAWAY close forever.
+	registered := false
+	defer func() {
+		if !registered {
+			c.endOpen()
+		}
+	}()
 	openCtx, cancel := context.WithCancelCause(ctx)
 	// A request blocked in OpenStreamSync has no request stream yet, so it is not
-	// in flight: GOAWAY cancels the open instead of letting it proceed.
+	// in flight: GOAWAY cancels the open instead of letting it proceed. It still
+	// counts as activity, so the connection is not closed underneath it.
 	stop := context.AfterFunc(c.goAwayCtx, func() { cancel(errGoAway) })
 	str, err := c.OpenStreamSync(openCtx)
 	stop()
 	cancel(nil)
 	if err != nil {
-		c.endOpen()
 		if context.Cause(openCtx) == errGoAway {
 			return nil, errGoAway
 		}
@@ -198,7 +210,6 @@ func (c *connection) openRequestStream(
 	if c.goAwayCtx.Err() != nil {
 		str.CancelRead(quic.StreamErrorCode(ErrCodeRequestCanceled))
 		str.CancelWrite(quic.StreamErrorCode(ErrCodeRequestCanceled))
-		c.endOpen()
 		return nil, errGoAway
 	}
 
@@ -207,8 +218,9 @@ func (c *connection) openRequestStream(
 	c.streams[str.StreamID()] = datagrams
 	// The registered stream now carries the activity: release the open count in
 	// the same critical section, so the connection is never seen as idle in
-	// between.
+	// between, and disarm the deferred release.
 	c.openingRequests--
+	registered = true
 	c.streamMx.Unlock()
 	qstr := newStateTrackingStream(str, c, datagrams)
 	rsp := &http.Response{}
