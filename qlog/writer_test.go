@@ -6,6 +6,7 @@ import (
 	"io"
 	"log"
 	"os"
+	"sync"
 	"testing"
 	"time"
 
@@ -90,12 +91,44 @@ func TestWriterDropsEventsWhenTheWriterIsBlocked(t *testing.T) {
 	require.Contains(t, logBuf.String(), "dropped 1 events")
 }
 
+// lockedBuffer is a bytes.Buffer that tolerates being read while the writer
+// goroutine appends to it, so a test can observe the asynchronous writer
+// without racing on the buffer itself.
+type lockedBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *lockedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *lockedBuffer) Len() int {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Len()
+}
+
+func (b *lockedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+func (b *lockedBuffer) contains(s string) bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return bytes.Contains(b.buf.Bytes(), []byte(s))
+}
+
 // A RecordEvent racing Close must neither panic — the previous design closed
 // the events channel, turning a racing sender into a send on a closed
-// channel — nor lose the events that were recorded before Close. Late
-// senders are dropped once Run has drained, and Close is idempotent.
+// channel — nor lose the events that were already recorded. Late senders are
+// dropped once Run has drained, and Close is idempotent.
 func TestWriterRecordEventRacingCloseDoesNotPanic(t *testing.T) {
-	buf := &bytes.Buffer{}
+	buf := &lockedBuffer{}
 	tr := &trace{
 		VantagePoint: vantagePoint{Type: "transport"},
 		CommonFields: commonFields{ReferenceTime: time.Now()},
@@ -103,20 +136,37 @@ func TestWriterRecordEventRacingCloseDoesNotPanic(t *testing.T) {
 	w := newWriter(nopWriteCloser(buf), tr)
 	go w.Run()
 
+	// Establish the property under test before racing Close: an event handed to
+	// the writer before Close is written out. Run encodes asynchronously, so
+	// wait for it instead of assuming a scheduling order.
+	w.RecordEvent(time.Now(), &eventGeneric{name: "before-close", msg: "before-close"})
+	require.Eventually(t, func() bool { return buf.contains("before-close") },
+		time.Second, time.Millisecond, "event recorded before Close was not written")
+
+	// Race a burst of senders against Close. The interleaving is deliberately
+	// not synchronized: whatever the timing, this must not panic and Close must
+	// be idempotent.
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
 		for i := 0; i < 1000; i++ {
-			w.RecordEvent(time.Now(), &eventGeneric{name: "test", msg: "test"})
+			w.RecordEvent(time.Now(), &eventGeneric{name: "racing", msg: "racing"})
 		}
 	}()
+	// Capture the Close log line: the racing burst is expected to overrun the
+	// event channel, and that is reported through the standard logger.
+	var logBuf bytes.Buffer
+	log.SetOutput(&logBuf)
+	defer log.SetOutput(os.Stdout)
 	w.Close()
 	<-done
-
-	// Everything recorded before the drain finished must be in the trace.
-	require.Contains(t, buf.String(), "test")
-	// Late events after Close are dropped, not recorded, and Close twice
-	// must not close the closing channel a second time.
-	w.RecordEvent(time.Now(), &eventGeneric{name: "test", msg: "test"})
 	require.NotPanics(t, func() { w.Close() })
+
+	// Run has exited, so a late event is dropped instead of being encoded, and
+	// the trace still holds what was recorded before Close.
+	before := buf.Len()
+	w.RecordEvent(time.Now(), &eventGeneric{name: "after-close", msg: "after-close"})
+	require.Equal(t, before, buf.Len())
+	require.True(t, buf.contains("before-close"))
+	require.NotContains(t, buf.String(), "after-close")
 }
