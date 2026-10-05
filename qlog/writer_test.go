@@ -89,3 +89,34 @@ func TestWriterDropsEventsWhenTheWriterIsBlocked(t *testing.T) {
 	w.Close()
 	require.Contains(t, logBuf.String(), "dropped 1 events")
 }
+
+// A RecordEvent racing Close must neither panic — the previous design closed
+// the events channel, turning a racing sender into a send on a closed
+// channel — nor lose the events that were recorded before Close. Late
+// senders are dropped once Run has drained, and Close is idempotent.
+func TestWriterRecordEventRacingCloseDoesNotPanic(t *testing.T) {
+	buf := &bytes.Buffer{}
+	tr := &trace{
+		VantagePoint: vantagePoint{Type: "transport"},
+		CommonFields: commonFields{ReferenceTime: time.Now()},
+	}
+	w := newWriter(nopWriteCloser(buf), tr)
+	go w.Run()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := 0; i < 1000; i++ {
+			w.RecordEvent(time.Now(), &eventGeneric{name: "test", msg: "test"})
+		}
+	}()
+	w.Close()
+	<-done
+
+	// Everything recorded before the drain finished must be in the trace.
+	require.Contains(t, buf.String(), "test")
+	// Late events after Close are dropped, not recorded, and Close twice
+	// must not close the closing channel a second time.
+	w.RecordEvent(time.Now(), &eventGeneric{name: "test", msg: "test"})
+	require.NotPanics(t, func() { w.Close() })
+}

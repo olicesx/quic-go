@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -30,6 +31,15 @@ type writer struct {
 	encodeErr  error
 	runStopped chan struct{}
 
+	// closing signals Run to drain and exit. It replaces closing the events
+	// channel: RecordEvent sends on events from connection callbacks, and a
+	// send racing close(events) panics, while a send racing close(closing)
+	// is either drained by Run or harmlessly dropped. closeOnce makes Close
+	// idempotent. Both are pointers/shared values, because connectionTracer
+	// copies the writer struct and all copies must observe one lifecycle.
+	closing   chan struct{}
+	closeOnce *sync.Once
+
 	// droppedEvents counts qlog events that were dropped because the writer
 	// (e.g. a slow disk) couldn't keep up. Event recording must never block the
 	// connection, so the drop is counted and reported - not silent.
@@ -45,6 +55,8 @@ func newWriter(w io.WriteCloser, tr *trace) *writer {
 		referenceTime: tr.CommonFields.ReferenceTime,
 		runStopped:    make(chan struct{}),
 		events:        make(chan event, eventChanSize),
+		closing:       make(chan struct{}),
+		closeOnce:     &sync.Once{},
 		droppedEvents: &atomic.Uint64{},
 	}
 }
@@ -84,21 +96,43 @@ func (w *writer) Run() {
 		w.encodeErr = err
 	}
 	enc = gojay.NewEncoder(w.w)
-	for ev := range w.events {
-		if w.encodeErr != nil { // if encoding failed, just continue draining the event channel
-			continue
+	for {
+		select {
+		case ev := <-w.events:
+			w.encodeEvent(enc, ev)
+		case <-w.closing:
+			// Close was called: drain the events that were recorded before
+			// (or raced with) it, then stop. Anything recorded after this
+			// drain remains in the buffered channel and is dropped; the
+			// tracer contract is that nothing records after Close.
+			for {
+				select {
+				case ev := <-w.events:
+					w.encodeEvent(enc, ev)
+				default:
+					return
+				}
+			}
 		}
-		if err := writeRecordSeparator(w.w); err != nil {
-			w.encodeErr = err
-			continue
-		}
-		if err := enc.Encode(ev); err != nil {
-			w.encodeErr = err
-			continue
-		}
-		if _, err := w.w.Write([]byte{'\n'}); err != nil {
-			w.encodeErr = err
-		}
+	}
+}
+
+// encodeEvent appends one event record to the trace file. Encoding failures
+// are sticky: once set, further events are skipped while Run keeps draining.
+func (w *writer) encodeEvent(enc *gojay.Encoder, ev event) {
+	if w.encodeErr != nil {
+		return
+	}
+	if err := writeRecordSeparator(w.w); err != nil {
+		w.encodeErr = err
+		return
+	}
+	if err := enc.Encode(ev); err != nil {
+		w.encodeErr = err
+		return
+	}
+	if _, err := w.w.Write([]byte{'\n'}); err != nil {
+		w.encodeErr = err
 	}
 }
 
@@ -112,7 +146,7 @@ func (w *writer) Close() {
 }
 
 func (w *writer) close() error {
-	close(w.events)
+	w.closeOnce.Do(func() { close(w.closing) })
 	<-w.runStopped
 	if w.encodeErr != nil {
 		return w.encodeErr
