@@ -193,3 +193,9 @@ func (f *StreamFrame) MaybeSplitOffFrame(maxSize protocol.ByteCount, version pro
 func (f *StreamFrame) PutBack() {
 	putStreamFrame(f)
 }
+
+// Pooled reports whether the frame still carries pool ownership, i.e. it has
+// been handed out by GetStreamFrame and not returned since. It is exported so
+// connection-layer tests can assert that every pooled frame is returned to the
+// pool exactly once, on the very frame they submitted.
+func (f *StreamFrame) Pooled() bool { return f.fromPool }

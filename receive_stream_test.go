@@ -129,8 +129,10 @@ func TestReceiveStreamReleasesPooledFrameOnFlowControlError(t *testing.T) {
 
 	f := wire.GetStreamFrame()
 	f.Data = f.Data[:4]
+	require.True(t, f.Pooled(), "a frame handed out by GetStreamFrame starts pool-owned")
 	mockFC.EXPECT().UpdateHighestReceived(gomock.Any(), false, gomock.Any()).Return(errors.New("flow control violation"))
 	require.Error(t, str.handleStreamFrame(f, time.Now()))
+	require.False(t, f.Pooled(), "rejected pooled frame must be returned to the pool")
 }
 
 // TestReceiveStreamReleasesPooledFrameWhenCancelled verifies the same for
@@ -145,6 +147,29 @@ func TestReceiveStreamReleasesPooledFrameWhenCancelled(t *testing.T) {
 	f.Data = f.Data[:4]
 	mockFC.EXPECT().UpdateHighestReceived(gomock.Any(), false, gomock.Any())
 	require.NoError(t, str.handleStreamFrame(f, time.Now()))
+	require.False(t, f.Pooled(), "frame on a cancelled stream must be returned to the pool")
+}
+
+// TestReceiveStreamReleasesPooledFrameWhenCancelledRemotely verifies the same
+// for frames arriving after a RESET_STREAM from the peer: readImpl reports
+// the reset error before it ever dequeues, so such frames must be returned to
+// the pool instead of being stranded in the frame sorter until teardown
+// (memory pinned up to the receive window, pooled frame lost from
+// circulation).
+func TestReceiveStreamReleasesPooledFrameWhenCancelledRemotely(t *testing.T) {
+	mockCtrl := gomock.NewController(t)
+	mockFC := mocks.NewMockStreamFlowController(mockCtrl)
+	str := newReceiveStream(42, nil, mockFC)
+	mockFC.EXPECT().UpdateHighestReceived(protocol.ByteCount(0x10), true, gomock.Any())
+	mockFC.EXPECT().Abandon()
+	require.NoError(t, str.handleResetStreamFrameImpl(&wire.ResetStreamFrame{ErrorCode: 7, FinalSize: 0x10}, time.Now()))
+
+	f := wire.GetStreamFrame()
+	f.Data = f.Data[:4]
+	require.True(t, f.Pooled())
+	mockFC.EXPECT().UpdateHighestReceived(gomock.Any(), false, gomock.Any())
+	require.NoError(t, str.handleStreamFrame(f, time.Now()))
+	require.False(t, f.Pooled(), "frame after a remote RESET must be returned to the pool")
 }
 
 func TestReceiveStreamReadOverlappingData(t *testing.T) {
@@ -663,4 +688,86 @@ func TestReceiveStreamConcurrentReads(t *testing.T) {
 	}
 	require.Equal(t, protocol.ByteCount(6), bytesRead)
 	require.Equal(t, int32(1), numCompleted.Load())
+}
+
+func TestReceiveStreamReadBuffered(t *testing.T) {
+	mockCtrl := gomock.NewController(t)
+	mockFC := mocks.NewMockStreamFlowController(mockCtrl)
+	str := newReceiveStream(42, nil, mockFC)
+
+	require.Zero(t, str.ReadBuffered(), "an empty stream reports nothing buffered")
+
+	f1 := wire.GetStreamFrame()
+	f1.Data = f1.Data[:6]
+	copy(f1.Data, []byte("foobar"))
+	mockFC.EXPECT().UpdateHighestReceived(protocol.ByteCount(6), false, gomock.Any())
+	require.NoError(t, str.handleStreamFrame(f1, time.Now()))
+	require.Equal(t, 6, str.ReadBuffered())
+
+	// A queued contiguous frame counts once it is at the sorter head, before
+	// it is dequeued into currentFrame. The count is the current-frame
+	// remainder plus the next contiguous queued frame, not the sum of all
+	// queued frames.
+	f2 := wire.GetStreamFrame()
+	f2.Data = f2.Data[:4]
+	f2.Offset = 6
+	copy(f2.Data, []byte("quux"))
+	mockFC.EXPECT().UpdateHighestReceived(protocol.ByteCount(10), false, gomock.Any())
+	require.NoError(t, str.handleStreamFrame(f2, time.Now()))
+	require.Equal(t, 6, str.ReadBuffered(), "only the sorter-head frame is counted")
+
+	mockFC.EXPECT().AddBytesRead(protocol.ByteCount(4))
+	n, err := (&readerWithTimeout{Reader: str, Timeout: time.Second}).Read(make([]byte, 4))
+	require.NoError(t, err)
+	require.Equal(t, 4, n)
+	require.Equal(t, 6, str.ReadBuffered(), "a partially consumed frame reports only the remainder")
+
+	// The second Read drains the 2-byte remainder of f1 and then the 4 bytes
+	// of f2: readImpl reports AddBytesRead per copy iteration, so the
+	// controller sees 2 and then 4.
+	mockFC.EXPECT().AddBytesRead(protocol.ByteCount(2))
+	mockFC.EXPECT().AddBytesRead(protocol.ByteCount(4))
+	n, err = (&readerWithTimeout{Reader: str, Timeout: time.Second}).Read(make([]byte, 64))
+	require.NoError(t, err)
+	require.Equal(t, 6, n)
+	require.Zero(t, str.ReadBuffered())
+}
+
+// TestReceiveStreamReadBufferedIsOnlyAHint pins the documented exception: a
+// non-zero result does not promise the next Read returns bytes. A read
+// deadline that already expired is reported by Read before buffered data is
+// consumed, while ReadBuffered keeps reporting the buffered count.
+func TestReceiveStreamReadBufferedIsOnlyAHint(t *testing.T) {
+	mockCtrl := gomock.NewController(t)
+	mockFC := mocks.NewMockStreamFlowController(mockCtrl)
+	str := newReceiveStream(42, nil, mockFC)
+
+	f1 := wire.GetStreamFrame()
+	f1.Data = f1.Data[:6]
+	copy(f1.Data, []byte("foobar"))
+	mockFC.EXPECT().UpdateHighestReceived(protocol.ByteCount(6), false, gomock.Any())
+	require.NoError(t, str.handleStreamFrame(f1, time.Now()))
+
+	require.NoError(t, str.SetReadDeadline(time.Now().Add(-time.Second)))
+	_, err := (&readerWithTimeout{Reader: str, Timeout: time.Second}).Read(make([]byte, 6))
+	require.Error(t, err)
+	require.Equal(t, 6, str.ReadBuffered(), "the buffered count survives a deadline error")
+}
+
+// TestReceiveStreamReadBufferedAfterCloseForShutdown verifies that a shutdown
+// releases the queued frames so nothing stays reported as buffered.
+func TestReceiveStreamReadBufferedAfterCloseForShutdown(t *testing.T) {
+	mockCtrl := gomock.NewController(t)
+	mockFC := mocks.NewMockStreamFlowController(mockCtrl)
+	str := newReceiveStream(42, nil, mockFC)
+
+	f1 := wire.GetStreamFrame()
+	f1.Data = f1.Data[:6]
+	copy(f1.Data, []byte("foobar"))
+	mockFC.EXPECT().UpdateHighestReceived(protocol.ByteCount(6), false, gomock.Any())
+	require.NoError(t, str.handleStreamFrame(f1, time.Now()))
+	require.Equal(t, 6, str.ReadBuffered())
+
+	str.closeForShutdown(errors.New("shut down"))
+	require.Zero(t, str.ReadBuffered())
 }
