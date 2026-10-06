@@ -17,7 +17,6 @@ import (
 type sendStreamI interface {
 	SendStream
 	handleStopSendingFrame(*wire.StopSendingFrame)
-	hasData() bool
 	popStreamFrame(protocol.ByteCount, protocol.Version) (_ ackhandler.StreamFrame, _ *wire.StreamDataBlockedFrame, hasMore bool)
 	closeForShutdown(error)
 	updateSendWindow(protocol.ByteCount)
@@ -345,13 +344,6 @@ func (s *sendStream) maybeGetRetransmission(maxBytes protocol.ByteCount, v proto
 	}
 	s.retransmissionQueue = s.retransmissionQueue[1:]
 	return f, len(s.retransmissionQueue) > 0
-}
-
-func (s *sendStream) hasData() bool {
-	s.mutex.Lock()
-	hasData := len(s.dataForWriting) > 0
-	s.mutex.Unlock()
-	return hasData
 }
 
 func (s *sendStream) getDataForWriting(f *wire.StreamFrame, maxBytes protocol.ByteCount) {

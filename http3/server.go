@@ -656,7 +656,7 @@ func (s *Server) handleRequest(conn *connection, str quic.Stream, datagrams *dat
 		}
 		return err
 	})
-	body := newRequestBody(hstr, contentLength, conn.Context(), conn.ReceivedSettings(), conn.Settings)
+	body := newRequestBody(hstr, contentLength)
 	req.Body = body
 
 	if s.Logger != nil {

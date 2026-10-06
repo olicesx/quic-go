@@ -147,8 +147,7 @@ func (m *streamsMap) OpenStream() (Stream, error) {
 	if reset {
 		return nil, Err0RTTRejected
 	}
-	str, err := mm.OpenStream()
-	return str, convertStreamError(err, protocol.StreamTypeBidi, m.perspective)
+	return mm.OpenStream()
 }
 
 func (m *streamsMap) OpenStreamSync(ctx context.Context) (Stream, error) {
@@ -159,8 +158,7 @@ func (m *streamsMap) OpenStreamSync(ctx context.Context) (Stream, error) {
 	if reset {
 		return nil, Err0RTTRejected
 	}
-	str, err := mm.OpenStreamSync(ctx)
-	return str, convertStreamError(err, protocol.StreamTypeBidi, m.perspective)
+	return mm.OpenStreamSync(ctx)
 }
 
 func (m *streamsMap) OpenUniStream() (SendStream, error) {
@@ -171,8 +169,7 @@ func (m *streamsMap) OpenUniStream() (SendStream, error) {
 	if reset {
 		return nil, Err0RTTRejected
 	}
-	str, err := mm.OpenStream()
-	return str, convertStreamError(err, protocol.StreamTypeBidi, m.perspective)
+	return mm.OpenStream()
 }
 
 func (m *streamsMap) OpenUniStreamSync(ctx context.Context) (SendStream, error) {
@@ -183,8 +180,7 @@ func (m *streamsMap) OpenUniStreamSync(ctx context.Context) (SendStream, error) 
 	if reset {
 		return nil, Err0RTTRejected
 	}
-	str, err := mm.OpenStreamSync(ctx)
-	return str, convertStreamError(err, protocol.StreamTypeUni, m.perspective)
+	return mm.OpenStreamSync(ctx)
 }
 
 func (m *streamsMap) AcceptStream(ctx context.Context) (Stream, error) {

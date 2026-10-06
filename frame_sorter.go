@@ -8,12 +8,6 @@ import (
 	"github.com/olicesx/quic-go/internal/utils/tree"
 )
 
-// byteInterval is an interval from one ByteCount to the other
-type byteInterval struct {
-	Start protocol.ByteCount
-	End   protocol.ByteCount
-}
-
 // frameReleaser returns a pooled frame to its pool. Implemented by
 // *wire.StreamFrame. Passing the frame itself (instead of a closure over it)
 // avoids a heap-allocated done callback per received frame.

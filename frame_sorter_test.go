@@ -8,6 +8,7 @@ import (
 	"golang.org/x/exp/rand"
 
 	"github.com/olicesx/quic-go/internal/protocol"
+	"github.com/olicesx/quic-go/internal/utils"
 
 	"github.com/stretchr/testify/require"
 )
@@ -115,7 +116,7 @@ func TestFrameSorterGapHandling(t *testing.T) {
 		}
 	}
 
-	checkGaps := func(t *testing.T, s *frameSorter, expectedGaps []byteInterval) {
+	checkGaps := func(t *testing.T, s *frameSorter, expectedGaps []utils.ByteInterval) {
 		// Get all gaps from the gapTree as a sorted slice.
 		gaps := s.gapTree.Values()
 		if len(gaps) != len(expectedGaps) {
@@ -126,7 +127,7 @@ func TestFrameSorterGapHandling(t *testing.T) {
 			require.Equal(t, len(expectedGaps), len(gaps))
 		}
 		for i, gap := range gaps {
-			require.Equal(t, expectedGaps[i], byteInterval{Start: gap.Start, End: gap.End})
+			require.Equal(t, expectedGaps[i], utils.ByteInterval{Start: gap.Start, End: gap.End})
 		}
 	}
 
@@ -146,7 +147,7 @@ func TestFrameSorterGapHandling(t *testing.T) {
 			3: f1,
 			6: f2,
 		})
-		checkGaps(t, s, []byteInterval{
+		checkGaps(t, s, []utils.ByteInterval{
 			{Start: 0, End: 3},
 			{Start: 11, End: protocol.MaxByteCount},
 		})
@@ -170,7 +171,7 @@ func TestFrameSorterGapHandling(t *testing.T) {
 			3:  f1,
 			10: f2,
 		})
-		checkGaps(t, s, []byteInterval{
+		checkGaps(t, s, []utils.ByteInterval{
 			{Start: 0, End: 3},
 			{Start: 6, End: 10},
 			{Start: 15, End: protocol.MaxByteCount},
@@ -199,7 +200,7 @@ func TestFrameSorterGapHandling(t *testing.T) {
 			6:  f2,
 			10: f3,
 		})
-		checkGaps(t, s, []byteInterval{
+		checkGaps(t, s, []utils.ByteInterval{
 			{Start: 0, End: 3},
 			{Start: 15, End: protocol.MaxByteCount},
 		})
@@ -224,7 +225,7 @@ func TestFrameSorterGapHandling(t *testing.T) {
 			3: f1,
 			7: f2[2:],
 		})
-		checkGaps(t, s, []byteInterval{
+		checkGaps(t, s, []utils.ByteInterval{
 			{Start: 0, End: 3},
 			{Start: 9, End: protocol.MaxByteCount},
 		})
@@ -245,7 +246,7 @@ func TestFrameSorterGapHandling(t *testing.T) {
 			3 * mult: f1,
 			7 * mult: f2[2*mult:],
 		})
-		checkGaps(t, s, []byteInterval{
+		checkGaps(t, s, []utils.ByteInterval{
 			{Start: 0, End: 3 * mult},
 			{Start: 9 * mult, End: protocol.MaxByteCount},
 		})
@@ -269,7 +270,7 @@ func TestFrameSorterGapHandling(t *testing.T) {
 			0: f1,
 			4: f2[1:],
 		})
-		checkGaps(t, s, []byteInterval{
+		checkGaps(t, s, []utils.ByteInterval{
 			{Start: 7, End: protocol.MaxByteCount},
 		})
 		require.False(t, t1.WasCalled())
@@ -289,7 +290,7 @@ func TestFrameSorterGapHandling(t *testing.T) {
 			0:        f1,
 			4 * mult: f2[mult:],
 		})
-		checkGaps(t, s, []byteInterval{
+		checkGaps(t, s, []utils.ByteInterval{
 			{Start: 7 * mult, End: protocol.MaxByteCount},
 		})
 		require.False(t, t1.WasCalled())
@@ -312,7 +313,7 @@ func TestFrameSorterGapHandling(t *testing.T) {
 			3: f2[:2],
 			5: f1,
 		})
-		checkGaps(t, s, []byteInterval{
+		checkGaps(t, s, []utils.ByteInterval{
 			{Start: 0, End: 3},
 			{Start: 9, End: protocol.MaxByteCount},
 		})
@@ -333,7 +334,7 @@ func TestFrameSorterGapHandling(t *testing.T) {
 			3 * mult: f2[:2*mult],
 			5 * mult: f1,
 		})
-		checkGaps(t, s, []byteInterval{
+		checkGaps(t, s, []utils.ByteInterval{
 			{Start: 0, End: 3 * mult},
 			{Start: 9 * mult, End: protocol.MaxByteCount},
 		})
@@ -361,7 +362,7 @@ func TestFrameSorterGapHandling(t *testing.T) {
 			6:  f2,
 			10: f3,
 		})
-		checkGaps(t, s, []byteInterval{
+		checkGaps(t, s, []utils.ByteInterval{
 			{Start: 0, End: 3},
 			{Start: 8, End: 10},
 			{Start: 15, End: protocol.MaxByteCount},
@@ -391,7 +392,7 @@ func TestFrameSorterGapHandling(t *testing.T) {
 			10: f2,
 			15: f3,
 		})
-		checkGaps(t, s, []byteInterval{
+		checkGaps(t, s, []utils.ByteInterval{
 			{Start: 0, End: 3},
 			{Start: 6, End: 10},
 			{Start: 12, End: 15},
@@ -422,7 +423,7 @@ func TestFrameSorterGapHandling(t *testing.T) {
 			8:  f2,
 			10: f3,
 		})
-		checkGaps(t, s, []byteInterval{
+		checkGaps(t, s, []utils.ByteInterval{
 			{Start: 0, End: 3},
 			{Start: 6, End: 8},
 			{Start: 15, End: protocol.MaxByteCount},
@@ -452,7 +453,7 @@ func TestFrameSorterGapHandling(t *testing.T) {
 			6:  f3[1:5],
 			10: f2,
 		})
-		checkGaps(t, s, []byteInterval{
+		checkGaps(t, s, []utils.ByteInterval{
 			{Start: 0, End: 3},
 			{Start: 15, End: protocol.MaxByteCount},
 		})
@@ -478,7 +479,7 @@ func TestFrameSorterGapHandling(t *testing.T) {
 			6 * mult:  f3[mult : 5*mult],
 			10 * mult: f2,
 		})
-		checkGaps(t, s, []byteInterval{
+		checkGaps(t, s, []utils.ByteInterval{
 			{Start: 0, End: 3 * mult},
 			{Start: 15 * mult, End: protocol.MaxByteCount},
 		})
@@ -507,7 +508,7 @@ func TestFrameSorterGapHandling(t *testing.T) {
 			7:  f3[2:],
 			10: f2,
 		})
-		checkGaps(t, s, []byteInterval{
+		checkGaps(t, s, []utils.ByteInterval{
 			{Start: 0, End: 3},
 			{Start: 15, End: protocol.MaxByteCount},
 		})
@@ -537,7 +538,7 @@ func TestFrameSorterGapHandling(t *testing.T) {
 			7 * mult:  f3[2*mult:],
 			10 * mult: f2,
 		})
-		checkGaps(t, s, []byteInterval{
+		checkGaps(t, s, []utils.ByteInterval{
 			{Start: 0, End: 3 * mult},
 			{Start: 15 * mult, End: protocol.MaxByteCount},
 		})
@@ -561,7 +562,7 @@ func TestFrameSorterGapHandling(t *testing.T) {
 		checkQueue(t, s, map[protocol.ByteCount][]byte{
 			3: f2,
 		})
-		checkGaps(t, s, []byteInterval{
+		checkGaps(t, s, []utils.ByteInterval{
 			{Start: 0, End: 3},
 			{Start: 10, End: protocol.MaxByteCount},
 		})
@@ -587,7 +588,7 @@ func TestFrameSorterGapHandling(t *testing.T) {
 		checkQueue(t, s, map[protocol.ByteCount][]byte{
 			3: f3,
 		})
-		checkGaps(t, s, []byteInterval{
+		checkGaps(t, s, []utils.ByteInterval{
 			{Start: 0, End: 3},
 			{Start: 10, End: protocol.MaxByteCount},
 		})
@@ -615,7 +616,7 @@ func TestFrameSorterGapHandling(t *testing.T) {
 			3: f3[:3],
 			6: f2,
 		})
-		checkGaps(t, s, []byteInterval{
+		checkGaps(t, s, []utils.ByteInterval{
 			{Start: 0, End: 3},
 			{Start: 10, End: protocol.MaxByteCount},
 		})
@@ -640,7 +641,7 @@ func TestFrameSorterGapHandling(t *testing.T) {
 			3 * mult: f3[:3*mult],
 			6 * mult: f2,
 		})
-		checkGaps(t, s, []byteInterval{
+		checkGaps(t, s, []utils.ByteInterval{
 			{Start: 0, End: 3 * mult},
 			{Start: 10 * mult, End: protocol.MaxByteCount},
 		})
@@ -667,7 +668,7 @@ func TestFrameSorterGapHandling(t *testing.T) {
 		checkQueue(t, s, map[protocol.ByteCount][]byte{
 			3: f3,
 		})
-		checkGaps(t, s, []byteInterval{
+		checkGaps(t, s, []utils.ByteInterval{
 			{Start: 0, End: 3},
 			{Start: 9, End: protocol.MaxByteCount},
 		})
@@ -691,7 +692,7 @@ func TestFrameSorterGapHandling(t *testing.T) {
 		checkQueue(t, s, map[protocol.ByteCount][]byte{
 			5: f1,
 		})
-		checkGaps(t, s, []byteInterval{
+		checkGaps(t, s, []utils.ByteInterval{
 			{Start: 0, End: 5},
 			{Start: 9, End: protocol.MaxByteCount},
 		})
@@ -718,7 +719,7 @@ func TestFrameSorterGapHandling(t *testing.T) {
 			3: f1,
 			6: f2,
 		})
-		checkGaps(t, s, []byteInterval{
+		checkGaps(t, s, []utils.ByteInterval{
 			{Start: 0, End: 3},
 			{Start: 9, End: protocol.MaxByteCount},
 		})
@@ -742,7 +743,7 @@ func TestFrameSorterGapHandling(t *testing.T) {
 		checkQueue(t, s, map[protocol.ByteCount][]byte{
 			5: f1,
 		})
-		checkGaps(t, s, []byteInterval{
+		checkGaps(t, s, []utils.ByteInterval{
 			{Start: 0, End: 5},
 			{Start: 9, End: protocol.MaxByteCount},
 		})
@@ -768,7 +769,7 @@ func TestFrameSorterGapHandling(t *testing.T) {
 		checkQueue(t, s, map[protocol.ByteCount][]byte{
 			5: f1,
 		})
-		checkGaps(t, s, []byteInterval{
+		checkGaps(t, s, []utils.ByteInterval{
 			{Start: 0, End: 5},
 			{Start: 10, End: protocol.MaxByteCount},
 		})
@@ -791,7 +792,7 @@ func TestFrameSorterGapHandling(t *testing.T) {
 		checkQueue(t, s, map[protocol.ByteCount][]byte{
 			0: f1,
 		})
-		checkGaps(t, s, []byteInterval{
+		checkGaps(t, s, []utils.ByteInterval{
 			{Start: 10, End: protocol.MaxByteCount},
 		})
 		require.False(t, t1.WasCalled())
@@ -809,7 +810,7 @@ func TestFrameSorterGapHandling(t *testing.T) {
 		cb2, t2 := getFrameSorterTestCallback(t)
 		require.NoError(t, s.Push(f1, 5, cb1)) // 5 - 10
 		require.NoError(t, s.Push(f2, 7, cb2)) // 7 - 10
-		checkGaps(t, s, []byteInterval{
+		checkGaps(t, s, []utils.ByteInterval{
 			{Start: 0, End: 5},
 			{Start: 10, End: protocol.MaxByteCount},
 		})
@@ -835,7 +836,7 @@ func TestFrameSorterGapHandling(t *testing.T) {
 		checkQueue(t, s, map[protocol.ByteCount][]byte{
 			3: f2,
 		})
-		checkGaps(t, s, []byteInterval{
+		checkGaps(t, s, []utils.ByteInterval{
 			{Start: 0, End: 3},
 			{Start: 8, End: protocol.MaxByteCount},
 		})
@@ -861,7 +862,7 @@ func TestFrameSorterGapHandling(t *testing.T) {
 		checkQueue(t, s, map[protocol.ByteCount][]byte{
 			3: f3,
 		})
-		checkGaps(t, s, []byteInterval{
+		checkGaps(t, s, []utils.ByteInterval{
 			{Start: 0, End: 3},
 			{Start: 11, End: protocol.MaxByteCount},
 		})
@@ -889,7 +890,7 @@ func TestFrameSorterGapHandling(t *testing.T) {
 			3: f1,
 			6: f3,
 		})
-		checkGaps(t, s, []byteInterval{
+		checkGaps(t, s, []utils.ByteInterval{
 			{Start: 0, End: 3},
 			{Start: 12, End: protocol.MaxByteCount},
 		})
@@ -921,7 +922,7 @@ func TestFrameSorterGapHandling(t *testing.T) {
 			6:  f4,
 			15: f3,
 		})
-		checkGaps(t, s, []byteInterval{
+		checkGaps(t, s, []utils.ByteInterval{
 			{Start: 0, End: 3},
 			{Start: 18, End: protocol.MaxByteCount},
 		})
@@ -946,7 +947,7 @@ func TestFrameSorterGapHandling(t *testing.T) {
 		checkQueue(t, s, map[protocol.ByteCount][]byte{
 			3: f2,
 		})
-		checkGaps(t, s, []byteInterval{
+		checkGaps(t, s, []utils.ByteInterval{
 			{Start: 0, End: 3},
 			{Start: 13, End: protocol.MaxByteCount},
 		})
@@ -974,7 +975,7 @@ func TestFrameSorterGapHandling(t *testing.T) {
 			3: f1,
 			6: f2,
 		})
-		checkGaps(t, s, []byteInterval{
+		checkGaps(t, s, []utils.ByteInterval{
 			{Start: 0, End: 2},
 			{Start: 10, End: protocol.MaxByteCount},
 		})
@@ -1000,7 +1001,7 @@ func TestFrameSorterGapHandling(t *testing.T) {
 			3 * mult: f1,
 			6 * mult: f2,
 		})
-		checkGaps(t, s, []byteInterval{
+		checkGaps(t, s, []utils.ByteInterval{
 			{Start: 0, End: 2 * mult},
 			{Start: 10 * mult, End: protocol.MaxByteCount},
 		})
@@ -1029,7 +1030,7 @@ func TestFrameSorterGapHandling(t *testing.T) {
 			3: f1,
 			6: f2,
 		})
-		checkGaps(t, s, []byteInterval{
+		checkGaps(t, s, []utils.ByteInterval{
 			{Start: 0, End: 2},
 			{Start: 10, End: protocol.MaxByteCount},
 		})
@@ -1055,7 +1056,7 @@ func TestFrameSorterGapHandling(t *testing.T) {
 			3 * mult: f1,
 			6 * mult: f2,
 		})
-		checkGaps(t, s, []byteInterval{
+		checkGaps(t, s, []utils.ByteInterval{
 			{Start: 0, End: 2 * mult},
 			{Start: 10 * mult, End: protocol.MaxByteCount},
 		})
@@ -1083,7 +1084,7 @@ func TestFrameSorterGapHandling(t *testing.T) {
 			3: f1,
 			6: f3,
 		})
-		checkGaps(t, s, []byteInterval{
+		checkGaps(t, s, []utils.ByteInterval{
 			{Start: 0, End: 3},
 			{Start: 11, End: protocol.MaxByteCount},
 		})
@@ -1112,7 +1113,7 @@ func TestFrameSorterGapHandling(t *testing.T) {
 			6: f2,
 			9: f3[4:],
 		})
-		checkGaps(t, s, []byteInterval{
+		checkGaps(t, s, []utils.ByteInterval{
 			{Start: 0, End: 3},
 			{Start: 11, End: protocol.MaxByteCount},
 		})
@@ -1138,7 +1139,7 @@ func TestFrameSorterGapHandling(t *testing.T) {
 			6 * mult: f2,
 			9 * mult: f3[4*mult:],
 		})
-		checkGaps(t, s, []byteInterval{
+		checkGaps(t, s, []utils.ByteInterval{
 			{Start: 0, End: 3 * mult},
 			{Start: 11 * mult, End: protocol.MaxByteCount},
 		})
@@ -1166,7 +1167,7 @@ func TestFrameSorterGapHandling(t *testing.T) {
 			3: f1,
 			6: f3[1:],
 		})
-		checkGaps(t, s, []byteInterval{
+		checkGaps(t, s, []utils.ByteInterval{
 			{Start: 0, End: 3},
 			{Start: 15, End: protocol.MaxByteCount},
 		})
@@ -1191,7 +1192,7 @@ func TestFrameSorterGapHandling(t *testing.T) {
 			3 * mult: f1,
 			6 * mult: f3[mult:],
 		})
-		checkGaps(t, s, []byteInterval{
+		checkGaps(t, s, []utils.ByteInterval{
 			{Start: 0, End: 3 * mult},
 			{Start: 15 * mult, End: protocol.MaxByteCount},
 		})
@@ -1218,7 +1219,7 @@ func TestFrameSorterGapHandling(t *testing.T) {
 		checkQueue(t, s, map[protocol.ByteCount][]byte{
 			3: f3,
 		})
-		checkGaps(t, s, []byteInterval{
+		checkGaps(t, s, []utils.ByteInterval{
 			{Start: 0, End: 3},
 			{Start: 12, End: protocol.MaxByteCount},
 		})
@@ -1249,7 +1250,7 @@ func TestFrameSorterGapHandling(t *testing.T) {
 			3: f1,
 			6: f4[1:],
 		})
-		checkGaps(t, s, []byteInterval{
+		checkGaps(t, s, []utils.ByteInterval{
 			{Start: 0, End: 3},
 			{Start: 17, End: protocol.MaxByteCount},
 		})
@@ -1278,7 +1279,7 @@ func TestFrameSorterGapHandling(t *testing.T) {
 			3 * mult: f1,
 			6 * mult: f4[mult:],
 		})
-		checkGaps(t, s, []byteInterval{
+		checkGaps(t, s, []utils.ByteInterval{
 			{Start: 0, End: 3 * mult},
 			{Start: 17 * mult, End: protocol.MaxByteCount},
 		})
@@ -1311,7 +1312,7 @@ func TestFrameSorterGapHandling(t *testing.T) {
 			10: f3,
 			20: f4,
 		})
-		checkGaps(t, s, []byteInterval{
+		checkGaps(t, s, []utils.ByteInterval{
 			{Start: 0, End: 5},
 			{Start: 25, End: protocol.MaxByteCount},
 		})
@@ -1336,7 +1337,7 @@ func TestFrameSorterGapHandling(t *testing.T) {
 		require.NoError(t, s.Push(f1, 3, cb1)) // 3 - 6
 		require.NoError(t, s.Push(f2, 9, cb2)) // 9 - 13
 		require.NoError(t, s.Push(f3, 3, cb3)) // 3 - 11
-		checkGaps(t, s, []byteInterval{
+		checkGaps(t, s, []utils.ByteInterval{
 			{Start: 0, End: 3},
 			{Start: 13, End: protocol.MaxByteCount},
 		})
@@ -1361,7 +1362,7 @@ func TestFrameSorterGapHandling(t *testing.T) {
 		require.NoError(t, s.Push(f1, 3*mult, cb1)) // 3 - 6
 		require.NoError(t, s.Push(f2, 9*mult, cb2)) // 9 - 13
 		require.NoError(t, s.Push(f3, 3*mult, cb3)) // 3 - 11
-		checkGaps(t, s, []byteInterval{
+		checkGaps(t, s, []utils.ByteInterval{
 			{Start: 0, End: 3 * mult},
 			{Start: 13 * mult, End: protocol.MaxByteCount},
 		})
@@ -1472,7 +1473,7 @@ func testFrameSorterRandomized(t *testing.T, dataLen protocol.ByteCount, injectD
 	}
 	require.Equal(t, 1, s.gapTree.Len())
 	head := s.gapTree.Head()
-	require.Equal(t, byteInterval{Start: num * dataLen, End: protocol.MaxByteCount}, byteInterval{Start: head.Start, End: head.End})
+	require.Equal(t, utils.ByteInterval{Start: num * dataLen, End: protocol.MaxByteCount}, utils.ByteInterval{Start: head.Start, End: head.End})
 
 	// read all data
 	var read []byte

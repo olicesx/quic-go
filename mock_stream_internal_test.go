@@ -570,44 +570,6 @@ func (c *MockStreamIhandleStreamFrameCall) DoAndReturn(f func(*wire.StreamFrame,
 	return c
 }
 
-// hasData mocks base method.
-func (m *MockStreamI) hasData() bool {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "hasData")
-	ret0, _ := ret[0].(bool)
-	return ret0
-}
-
-// hasData indicates an expected call of hasData.
-func (mr *MockStreamIMockRecorder) hasData() *MockStreamIhasDataCall {
-	mr.mock.ctrl.T.Helper()
-	call := mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "hasData", reflect.TypeOf((*MockStreamI)(nil).hasData))
-	return &MockStreamIhasDataCall{Call: call}
-}
-
-// MockStreamIhasDataCall wrap *gomock.Call
-type MockStreamIhasDataCall struct {
-	*gomock.Call
-}
-
-// Return rewrite *gomock.Call.Return
-func (c *MockStreamIhasDataCall) Return(arg0 bool) *MockStreamIhasDataCall {
-	c.Call = c.Call.Return(arg0)
-	return c
-}
-
-// Do rewrite *gomock.Call.Do
-func (c *MockStreamIhasDataCall) Do(f func() bool) *MockStreamIhasDataCall {
-	c.Call = c.Call.Do(f)
-	return c
-}
-
-// DoAndReturn rewrite *gomock.Call.DoAndReturn
-func (c *MockStreamIhasDataCall) DoAndReturn(f func() bool) *MockStreamIhasDataCall {
-	c.Call = c.Call.DoAndReturn(f)
-	return c
-}
-
 // popStreamFrame mocks base method.
 func (m *MockStreamI) popStreamFrame(arg0 protocol.ByteCount, arg1 protocol.Version) (ackhandler.StreamFrame, *wire.StreamDataBlockedFrame, bool) {
 	m.ctrl.T.Helper()

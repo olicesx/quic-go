@@ -14,8 +14,6 @@ import (
 	"github.com/olicesx/quic-go"
 	"github.com/olicesx/quic-go/internal/protocol"
 	"github.com/olicesx/quic-go/quicvarint"
-
-	"github.com/olicesx/qpack"
 )
 
 const (
@@ -48,10 +46,6 @@ var defaultQuicConfig = &quic.Config{
 type ClientConn struct {
 	connection
 
-	// Enable support for HTTP/3 datagrams (RFC 9297).
-	// If a QUICConfig is set, datagram support also needs to be enabled on the QUIC layer by setting enableDatagrams.
-	enableDatagrams bool
-
 	// Additional HTTP/3 settings.
 	// It is invalid to specify any settings defined by RFC 9114 (HTTP/3) and RFC 9297 (HTTP Datagrams).
 	additionalSettings map[uint64]uint64
@@ -67,10 +61,7 @@ type ClientConn struct {
 	// However, if the user explicitly requested gzip it is not automatically uncompressed.
 	disableCompression bool
 
-	logger *slog.Logger
-
 	requestWriter *requestWriter
-	decoder       *qpack.Decoder
 }
 
 var _ http.RoundTripper = &ClientConn{}
@@ -90,24 +81,21 @@ func newClientConn(
 	logger *slog.Logger,
 ) *ClientConn {
 	c := &ClientConn{
-		enableDatagrams:    enableDatagrams,
 		additionalSettings: additionalSettings,
 		disableCompression: disableCompression,
-		logger:             logger,
 	}
 	if maxResponseHeaderBytes <= 0 {
 		c.maxResponseHeaderBytes = defaultMaxResponseHeaderBytes
 	} else {
 		c.maxResponseHeaderBytes = uint64(maxResponseHeaderBytes)
 	}
-	c.decoder = qpack.NewDecoder()
 	c.requestWriter = newRequestWriter()
 	c.connection = *newConnection(
 		conn.Context(),
 		conn,
-		c.enableDatagrams,
+		enableDatagrams,
 		protocol.PerspectiveClient,
-		c.logger,
+		logger,
 		0,
 	)
 	// controlStrHandler is a promoted field; the explicit connection selector

@@ -1,7 +1,6 @@
 package http3
 
 import (
-	"context"
 	"errors"
 	"io"
 	"sync"
@@ -74,19 +73,13 @@ func (r *body) Close() error {
 
 type requestBody struct {
 	body
-	connCtx      context.Context
-	rcvdSettings <-chan struct{}
-	getSettings  func() *Settings
 }
 
 var _ io.ReadCloser = &requestBody{}
 
-func newRequestBody(str *stream, contentLength int64, connCtx context.Context, rcvdSettings <-chan struct{}, getSettings func() *Settings) *requestBody {
+func newRequestBody(str *stream, contentLength int64) *requestBody {
 	return &requestBody{
-		body:         *newBody(str, contentLength),
-		connCtx:      connCtx,
-		rcvdSettings: rcvdSettings,
-		getSettings:  getSettings,
+		body: *newBody(str, contentLength),
 	}
 }
 

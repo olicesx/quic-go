@@ -263,10 +263,6 @@ func (f *AckFrame) Reset() {
 	f.ECT0 = 0
 	f.ECT1 = 0
 	f.ECNCE = 0
-	for _, r := range f.AckRanges {
-		r.Largest = 0
-		r.Smallest = 0
-	}
 	f.AckRanges = f.AckRanges[:0]
 }
 

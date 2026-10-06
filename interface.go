@@ -373,7 +373,7 @@ type ClientHelloInfo struct {
 	RemoteAddr net.Addr
 	// AddrVerified says if the remote address was verified using QUIC's Retry mechanism.
 	// Note that the Retry mechanism costs one network roundtrip,
-	// and is not performed unless Transport.MaxUnvalidatedHandshakes is surpassed.
+	// and is only performed if Transport.VerifySourceAddress returns true for this remote address.
 	AddrVerified bool
 }
 

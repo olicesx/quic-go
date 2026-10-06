@@ -29,10 +29,6 @@ import (
 // (mmsghdr = msghdr + u32 len, padded to 64B on amd64), and only N / NN /
 // Flags are unpacked. Addr stays nil; ECN/PKTINFO control data still flows
 // through the OOB buffer and is parsed by oobConn.ReadPacket.
-//
-// English: raw recvmmsg batch reader that skips per-packet source-address
-// allocation for client (single-remote) listeners.
-// 中文：裸 recvmmsg 批量读，面向客户端（单一远端）监听者，跳过每包源地址解析分配。
 type skipAddrBatchConn struct {
 	conn syscall.RawConn
 	// Scratch reused across calls; data pointers are re-bound to the

@@ -82,7 +82,7 @@ func putStreamFrame(f *StreamFrame) {
 		return
 	}
 	if cap(f.Data) != protocol.MaxPacketBufferSize {
-		panic("wire.PutStreamFrame called with packet of wrong size!")
+		panic("wire: StreamFrame.PutBack called with buffer of wrong capacity")
 	}
 	// Consume ownership before the hand-back. Clearing the flag here makes a
 	// back-to-back double PutBack a no-op instead of pooling the same pointer
