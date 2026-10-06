@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/olicesx/quic-go/internal/congestion"
 	"github.com/olicesx/quic-go/internal/mocks"
 	mocklogging "github.com/olicesx/quic-go/internal/mocks/logging"
 	"github.com/olicesx/quic-go/internal/protocol"
@@ -818,7 +819,8 @@ func TestSentPacketHandlerCongestion(t *testing.T) {
 		nil,
 		utils.DefaultLogger,
 	)
-	sph.congestion = cong
+	congIfc := congestion.SendAlgorithmWithDebugInfos(cong)
+	sph.congestion.Store(&congIfc)
 
 	var packets packetTracker
 	// Send the first 5 packets: not congestion-limited, not pacing-limited.
@@ -1011,7 +1013,8 @@ func TestSentPacketHandlerECN(t *testing.T) {
 		utils.DefaultLogger,
 	)
 	sph.ecnTracker = ecnHandler
-	sph.congestion = cong
+	congIfc := congestion.SendAlgorithmWithDebugInfos(cong)
+	sph.congestion.Store(&congIfc)
 
 	// ECN marks on non-1-RTT packets are ignored
 	sph.SentPacket(time.Now(), sph.PopPacketNumber(protocol.EncryptionInitial), protocol.InvalidPacketNumber, nil, nil, protocol.EncryptionInitial, protocol.ECT1, 1200, false)

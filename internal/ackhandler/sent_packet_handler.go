@@ -3,7 +3,7 @@ package ackhandler
 import (
 	"errors"
 	"fmt"
-	"sync"
+	"sync/atomic"
 	"time"
 
 	congestionExt "github.com/olicesx/quic-go/congestion"
@@ -89,9 +89,13 @@ type sentPacketHandler struct {
 
 	bytesInFlight protocol.ByteCount
 
-	congestion      congestion.SendAlgorithmWithDebugInfos
-	congestionMutex sync.RWMutex
-	rttStats        *utils.RTTStats
+	// congestion is published through an atomic pointer so the per-packet
+	// read path (SendMode, TimeUntilSend, SentPacket, ReceivedAck) never
+	// takes a lock, and so SetCongestionControl can run its external
+	// callback without blocking senders. Readers snapshot the pointer and
+	// keep calling into whichever controller they loaded.
+	congestion atomic.Pointer[congestion.SendAlgorithmWithDebugInfos]
+	rttStats   *utils.RTTStats
 
 	// The number of times a PTO has been sent without receiving an ack.
 	ptoCount uint32
@@ -132,7 +136,7 @@ func newSentPacketHandler(
 	tracer *logging.ConnectionTracer,
 	logger utils.Logger,
 ) *sentPacketHandler {
-	congestion := congestion.NewCubicSender(
+	var initialCongestion congestion.SendAlgorithmWithDebugInfos = congestion.NewCubicSender(
 		congestion.DefaultClock{},
 		rttStats,
 		initialMaxDatagramSize,
@@ -147,11 +151,11 @@ func newSentPacketHandler(
 		handshakePackets:               newPacketNumberSpace(0, false),
 		appDataPackets:                 newPacketNumberSpace(0, true),
 		rttStats:                       rttStats,
-		congestion:                     congestion,
 		perspective:                    pers,
 		tracer:                         tracer,
 		logger:                         logger,
 	}
+	h.congestion.Store(&initialCongestion)
 	if enableECN {
 		h.enableECN = true
 		h.ecnTracker = newECNTracker(logger, tracer)
@@ -958,15 +962,16 @@ func (h *sentPacketHandler) ResetForRetry(now time.Time) {
 }
 
 func (h *sentPacketHandler) getCongestionControl() congestion.SendAlgorithmWithDebugInfos {
-	h.congestionMutex.RLock()
-	cc := h.congestion
-	h.congestionMutex.RUnlock()
-	return cc
+	return *h.congestion.Load()
 }
 
+// SetCongestionControl replaces the congestion controller. The new
+// controller's SetRTTStatsProvider callback runs before the pointer is
+// published, so a reader that snapshots the new controller always sees it
+// fully configured; it deliberately runs under no lock so a blocking
+// external callback cannot stall the send path.
 func (h *sentPacketHandler) SetCongestionControl(cc congestionExt.CongestionControl) {
-	h.congestionMutex.Lock()
 	cc.SetRTTStatsProvider(h.rttStats)
-	h.congestion = &ccAdapter{cc}
-	h.congestionMutex.Unlock()
+	var adapted congestion.SendAlgorithmWithDebugInfos = &ccAdapter{cc}
+	h.congestion.Store(&adapted)
 }
