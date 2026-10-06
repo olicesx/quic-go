@@ -13,8 +13,7 @@ type (
 
 // Expose some constants from protocol that congestion control algorithms may need.
 const (
-	InitialPacketSizeIPv4      = protocol.InitialPacketSize
-	InitialPacketSizeIPv6      = protocol.InitialPacketSize
+	InitialPacketSize          = protocol.InitialPacketSize
 	MinPacingDelay             = protocol.MinPacingDelay
 	MaxPacketBufferSize        = protocol.MaxPacketBufferSize
 	MinInitialPacketSize       = protocol.MinInitialPacketSize
@@ -25,7 +24,6 @@ const (
 type AckedPacketInfo struct {
 	PacketNumber PacketNumber
 	BytesAcked   ByteCount
-	ReceivedTime time.Time
 }
 
 type LostPacketInfo struct {
@@ -50,6 +48,11 @@ type CongestionControl interface {
 	GetCongestionWindow() ByteCount
 }
 
+// RTTStatsProvider is the read-only RTT view the connection hands to external
+// congestion controllers. The connection keeps the mutating side of
+// utils.RTTStats to itself: no production controller ever calls the writers,
+// and exposing them would let an external CC rewrite the connection's RTT
+// estimate.
 type RTTStatsProvider interface {
 	MinRTT() time.Duration
 	LatestRTT() time.Duration
@@ -57,7 +60,4 @@ type RTTStatsProvider interface {
 	MeanDeviation() time.Duration
 	MaxAckDelay() time.Duration
 	PTO(includeMaxAckDelay bool) time.Duration
-	UpdateRTT(sendDelta, ackDelay time.Duration)
-	SetMaxAckDelay(mad time.Duration)
-	SetInitialRTT(t time.Duration)
 }
