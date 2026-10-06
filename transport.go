@@ -548,7 +548,7 @@ func (t *Transport) listen(conn rawConn) {
 			if closed {
 				return
 			}
-			t.logger.Debugf("Temporary error reading from conn: %w", err)
+			t.logger.Debugf("Temporary error reading from conn: %v", err)
 			continue
 		}
 		if err != nil {
@@ -729,7 +729,13 @@ func (t *Transport) ReadNonQUICPacket(ctx context.Context, b []byte) (int, net.A
 		p.buffer.Release()
 		return n, p.remoteAddr, nil
 	case <-t.listening:
-		return 0, nil, errors.New("closed")
+		// The listen loop only exits after the transport was closed, so
+		// closeErr is guaranteed to be set at this point. It unwraps to
+		// both net.ErrClosed and the error that caused the closure.
+		t.mutex.Lock()
+		err := t.closeErr
+		t.mutex.Unlock()
+		return 0, nil, err
 	}
 }
 

@@ -249,7 +249,7 @@ func requestFromHeadersIncremental(decode qpack.DecodeFunc, sizeLimit int) (*htt
 	} else {
 		u, err = url.ParseRequestURI(hdr.Path)
 		if err != nil {
-			return nil, fmt.Errorf("invalid content length: %w", err)
+			return nil, fmt.Errorf("invalid request path %q: %w", hdr.Path, err)
 		}
 		requestURI = hdr.Path
 	}

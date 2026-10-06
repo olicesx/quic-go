@@ -696,6 +696,7 @@ func (s *baseServer) handleInitialImpl(p receivedPacket, hdr *wire.Header) error
 	}
 	connID, err := s.connIDGenerator.GenerateConnectionID()
 	if err != nil {
+		p.buffer.Release()
 		return err
 	}
 	s.logger.Debugf("Changing connection ID to %s.", connID)
@@ -826,8 +827,6 @@ func (s *baseServer) sendRetryPacket(p rejectedPacket) error {
 func (s *baseServer) maybeSendInvalidToken(p rejectedPacket) {
 	defer p.buffer.Release()
 
-	// Only send INVALID_TOKEN if we can unprotect the packet.
-	// This makes sure that we won't send it for packets that were corrupted.
 	hdr := p.hdr
 	sealer, opener := handshake.NewInitialAEAD(hdr.DestConnectionID, protocol.PerspectiveServer, hdr.Version)
 	data := p.data[:hdr.ParsedLen()+hdr.Length]

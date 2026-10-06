@@ -950,7 +950,9 @@ func (s *connection) handleShortHeaderPacket(p receivedPacket) bool {
 
 	destConnID, err := wire.ParseConnectionID(p.data, s.srcConnIDLen)
 	if err != nil {
-		s.tracer.DroppedPacket(logging.PacketType1RTT, protocol.InvalidPacketNumber, protocol.ByteCount(len(p.data)), logging.PacketDropHeaderParseError)
+		if s.tracer != nil && s.tracer.DroppedPacket != nil {
+			s.tracer.DroppedPacket(logging.PacketType1RTT, protocol.InvalidPacketNumber, protocol.ByteCount(len(p.data)), logging.PacketDropHeaderParseError)
+		}
 		return false
 	}
 	pn, pnLen, keyPhase, data, err := s.unpacker.UnpackShortHeader(p.rcvTime, p.data)
@@ -2152,8 +2154,8 @@ func (s *connection) sendPacketsWithGSO(now time.Time) error {
 						// The oversized copy never enters the send queue,
 						// so hand its buffer back before unwinding.
 						oversize.Release()
-						if qerr := s.sendQueue.LastRunError(); qerr != nil {
-							return qerr
+						if runErr := s.sendQueue.LastRunError(); runErr != nil {
+							return runErr
 						}
 						return errSendQueueStopped
 					}
