@@ -3,6 +3,7 @@ package quic
 import (
 	"slices"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/olicesx/quic-go/internal/ackhandler"
@@ -37,7 +38,7 @@ type framer struct {
 	controlFrames              []wire.Frame
 	pathResponses              []*wire.PathResponseFrame
 	connFlowController         flowcontrol.ConnectionFlowController
-	queuedTooManyControlFrames bool
+	queuedTooManyControlFrames atomic.Bool
 }
 
 func newFramer(connFlowController flowcontrol.ConnectionFlowController) *framer {
@@ -76,7 +77,7 @@ func (f *framer) QueueControlFrame(frame wire.Frame) {
 	}
 	// This is a hack.
 	if len(f.controlFrames) >= maxControlFrames {
-		f.queuedTooManyControlFrames = true
+		f.queuedTooManyControlFrames.Store(true)
 		return
 	}
 	f.controlFrames = append(f.controlFrames, frame)
@@ -211,7 +212,7 @@ func (f *framer) appendControlFrames(
 // The correct solution would be to queue frames with their respective structs.
 // See https://github.com/olicesx/quic-go/issues/4271 for the queueing of stream-related control frames.
 func (f *framer) QueuedTooManyControlFrames() bool {
-	return f.queuedTooManyControlFrames
+	return f.queuedTooManyControlFrames.Load()
 }
 
 func (f *framer) AddActiveStream(id protocol.StreamID, str sendStreamI) {
