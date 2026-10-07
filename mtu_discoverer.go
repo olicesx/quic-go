@@ -164,7 +164,7 @@ func (f *mtuFinder) GetPing(now time.Time) (ackhandler.Frame, protocol.ByteCount
 	f.lastProbeTime = now
 	f.inFlight = size
 	return ackhandler.Frame{
-		Frame:   &wire.PingFrame{},
+		Frame:   wire.PingFrameSingleton,
 		Handler: &mtuFinderAckHandler{f},
 	}, size
 }

@@ -116,7 +116,7 @@ func (p *FrameParser) parseFrame(b []byte, typ uint64, encLevel protocol.Encrypt
 	} else {
 		switch typ {
 		case pingFrameType:
-			frame = &PingFrame{}
+			frame = PingFrameSingleton
 		case ackFrameType, ackECNFrameType:
 			ackDelayExponent := p.ackDelayExponent
 			if encLevel != protocol.Encryption1RTT {

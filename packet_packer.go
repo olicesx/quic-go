@@ -610,7 +610,7 @@ func (p *packetPacker) maybeGetAppDataPacket(
 		}
 		// the packet only contains an ACK
 		if p.numNonAckElicitingAcks >= protocol.MaxNonAckElicitingAcks {
-			ping := &wire.PingFrame{}
+			ping := wire.PingFrameSingleton
 			pl.frames = append(pl.frames, ackhandler.Frame{Frame: ping})
 			pl.length += ping.Length(v)
 			p.numNonAckElicitingAcks = 0

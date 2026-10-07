@@ -654,7 +654,7 @@ runLoop:
 		if keepAliveTime := s.nextKeepAliveTime(); !keepAliveTime.IsZero() && !now.Before(keepAliveTime) {
 			// send a PING frame since there is no activity in the connection
 			s.logger.Debugf("Sending a keep-alive PING to keep the connection alive.")
-			s.framer.QueueControlFrame(&wire.PingFrame{})
+			s.framer.QueueControlFrame(wire.PingFrameSingleton)
 			s.keepAlivePingSent = true
 		} else if !s.handshakeComplete && now.Sub(s.creationTime) >= s.config.handshakeTimeout() {
 			s.destroyImpl(qerr.ErrHandshakeTimeout)

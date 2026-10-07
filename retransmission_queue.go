@@ -29,11 +29,11 @@ func (q *retransmissionQueue) AddPing(encLevel protocol.EncryptionLevel) {
 	//nolint:exhaustive // Cannot send probe packets for 0-RTT.
 	switch encLevel {
 	case protocol.EncryptionInitial:
-		q.addInitial(&wire.PingFrame{})
+		q.addInitial(wire.PingFrameSingleton)
 	case protocol.EncryptionHandshake:
-		q.addHandshake(&wire.PingFrame{})
+		q.addHandshake(wire.PingFrameSingleton)
 	case protocol.Encryption1RTT:
-		q.addAppData(&wire.PingFrame{})
+		q.addAppData(wire.PingFrameSingleton)
 	default:
 		panic("unexpected encryption level")
 	}
