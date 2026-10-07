@@ -37,12 +37,6 @@ type packetUnpacker struct {
 	cs handshake.CryptoSetup
 
 	shortHdrConnIDLen int
-
-	// origPNBytes is the scratch for restoring header bytes destroyed by the
-	// optimistic 4-byte packet-number decrypt. The unpacker is owned by the
-	// connection's run loop, so one reusable buffer replaces the per-packet
-	// make([]byte, 4) that used to run on every inbound packet.
-	origPNBytes [4]byte
 }
 
 var _ unpacker = &packetUnpacker{}
@@ -171,7 +165,10 @@ func (u *packetUnpacker) unpackShortHeader(hd headerDecryptor, data []byte) (int
 	if len(data) < hdrLen+4+16 {
 		return 0, 0, 0, 0, fmt.Errorf("packet too small, expected at least 20 bytes after the header, got %d", len(data)-hdrLen)
 	}
-	copy(u.origPNBytes[:], data[hdrLen:hdrLen+4])
+	// 1. save a copy of the 4 bytes. The scratch is a per-call stack array: it
+	// must not become shared state, because the unpacker has no locking.
+	var origPNBytes [4]byte
+	copy(origPNBytes[:], data[hdrLen:hdrLen+4])
 	// 2. decrypt the header, assuming a 4 byte packet number
 	hd.DecryptHeader(
 		data[hdrLen+4:hdrLen+4+16],
@@ -185,28 +182,31 @@ func (u *packetUnpacker) unpackShortHeader(hd headerDecryptor, data []byte) (int
 	}
 	// 4. if the packet number is shorter than 4 bytes, replace the remaining bytes with the copy we saved earlier
 	if pnLen != protocol.PacketNumberLen4 {
-		copy(data[hdrLen+int(pnLen):hdrLen+4], u.origPNBytes[int(pnLen):])
+		copy(data[hdrLen+int(pnLen):hdrLen+4], origPNBytes[int(pnLen):])
 	}
 	return l, pn, pnLen, kp, parseErr
 }
 
 // The error is either nil, a wire.ErrInvalidReservedBits or of type headerParseError.
 func (u *packetUnpacker) unpackLongHeader(hd headerDecryptor, hdr *wire.Header, data []byte) (*wire.ExtendedHeader, error) {
-	extHdr, err := unpackLongHeader(hd, hdr, data, &u.origPNBytes)
+	extHdr, err := unpackLongHeader(hd, hdr, data)
 	if err != nil && err != wire.ErrInvalidReservedBits {
 		return nil, &headerParseError{err: err}
 	}
 	return extHdr, err
 }
 
-func unpackLongHeader(hd headerDecryptor, hdr *wire.Header, data []byte, origPNBytes *[4]byte) (*wire.ExtendedHeader, error) {
+func unpackLongHeader(hd headerDecryptor, hdr *wire.Header, data []byte) (*wire.ExtendedHeader, error) {
 	hdrLen := hdr.ParsedLen()
 	if protocol.ByteCount(len(data)) < hdrLen+4+16 {
 		//nolint:staticcheck
 		return nil, fmt.Errorf("Packet too small. Expected at least 20 bytes after the header, got %d", protocol.ByteCount(len(data))-hdrLen)
 	}
 	// The packet number can be up to 4 bytes long, but we won't know the length until we decrypt it.
-	// 1. save a copy of the 4 bytes
+	// 1. save a copy of the 4 bytes in a per-call stack array; streaming and
+	// header unpacking are separate call paths, so nothing here may become
+	// shared state on the unpacker.
+	var origPNBytes [4]byte
 	copy(origPNBytes[:], data[hdrLen:hdrLen+4])
 	// 2. decrypt the header, assuming a 4 byte packet number
 	hd.DecryptHeader(

@@ -91,8 +91,7 @@ var _ = Describe("Server", func() {
 		Expect(replyHdr.SrcConnectionID).To(Equal(origHdr.DestConnectionID))
 		Expect(replyHdr.DestConnectionID).To(Equal(origHdr.SrcConnectionID))
 		_, opener := handshake.NewInitialAEAD(origHdr.DestConnectionID, protocol.PerspectiveClient, replyHdr.Version)
-		var origPNBytes [4]byte
-		extHdr, err := unpackLongHeader(opener, replyHdr, b, &origPNBytes)
+		extHdr, err := unpackLongHeader(opener, replyHdr, b)
 		Expect(err).ToNot(HaveOccurred())
 		data, err := opener.Open(nil, b[extHdr.ParsedLen():], extHdr.PacketNumber, b[:extHdr.ParsedLen()])
 		Expect(err).ToNot(HaveOccurred())

@@ -32,8 +32,10 @@ func newFrameSorter() *frameSorter {
 	s := frameSorter{
 		gapTree: tree.New[utils.ByteInterval](),
 		// The queue map grows lazily: most proxy streams deliver in order and
-		// never queue a frame, and a 64-slot preallocation cost ~4 KiB per
-		// stream plus ~4 KiB per crypto stream on every connection.
+		// never queue a frame, while the former 64-slot preallocation cost
+		// ~6.4 KiB per stream and ~6.4 KiB per crypto stream on every
+		// connection. A stream that does queue a large reorder window pays the
+		// growth churn instead and ends at the same live queue size.
 		queue: make(map[protocol.ByteCount]frameSorterEntry),
 	}
 	s.gapTree.Insert(utils.ByteInterval{Start: 0, End: protocol.MaxByteCount})
