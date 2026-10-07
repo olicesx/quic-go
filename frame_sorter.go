@@ -31,7 +31,10 @@ var errDuplicateStreamData = errors.New("duplicate stream data")
 func newFrameSorter() *frameSorter {
 	s := frameSorter{
 		gapTree: tree.New[utils.ByteInterval](),
-		queue:   make(map[protocol.ByteCount]frameSorterEntry, 64),
+		// The queue map grows lazily: most proxy streams deliver in order and
+		// never queue a frame, and a 64-slot preallocation cost ~4 KiB per
+		// stream plus ~4 KiB per crypto stream on every connection.
+		queue: make(map[protocol.ByteCount]frameSorterEntry),
 	}
 	s.gapTree.Insert(utils.ByteInterval{Start: 0, End: protocol.MaxByteCount})
 	return &s

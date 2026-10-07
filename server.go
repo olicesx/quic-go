@@ -830,7 +830,8 @@ func (s *baseServer) maybeSendInvalidToken(p rejectedPacket) {
 	hdr := p.hdr
 	sealer, opener := handshake.NewInitialAEAD(hdr.DestConnectionID, protocol.PerspectiveServer, hdr.Version)
 	data := p.data[:hdr.ParsedLen()+hdr.Length]
-	extHdr, err := unpackLongHeader(opener, hdr, data)
+	var origPNBytes [4]byte
+	extHdr, err := unpackLongHeader(opener, hdr, data, &origPNBytes)
 	// Only send INVALID_TOKEN if we can unprotect the packet.
 	// This makes sure that we won't send it for packets that were corrupted.
 	if err != nil {
